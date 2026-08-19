@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/RegulatedAIWorkflow.Api/RegulatedAIWorkflow.Api.csproj" />
+  <Project Path="src/RegulatedAIWorkflow.Core/RegulatedAIWorkflow.Core.csproj" />
+  <Project Path="tests/RegulatedAIWorkflow.Tests/RegulatedAIWorkflow.Tests.csproj" />
+</Solution>

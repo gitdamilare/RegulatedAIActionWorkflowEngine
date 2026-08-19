@@ -1,0 +1,20 @@
+# Build and test output
+bin/
+obj/
+TestResults/
+artifacts/
+
+# IDE and user files
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local CLI and cache files
+.dotnet/
+*.log
+tmp/
+
+# Local Codex implementation notes
+/.codex/
+AGENTS.md

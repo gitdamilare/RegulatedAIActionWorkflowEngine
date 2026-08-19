@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>RegulatedAIWorkflow.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RegulatedAIWorkflow.Core\RegulatedAIWorkflow.Core.csproj" />
+  </ItemGroup>
+</Project>
