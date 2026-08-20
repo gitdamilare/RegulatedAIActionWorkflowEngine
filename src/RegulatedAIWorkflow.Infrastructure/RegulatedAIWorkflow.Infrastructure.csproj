@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>RegulatedAIWorkflow.Infrastructure</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RegulatedAIWorkflow.Core\RegulatedAIWorkflow.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="src/RegulatedAIWorkflow.Api/RegulatedAIWorkflow.Api.csproj" />
   <Project Path="src/RegulatedAIWorkflow.Core/RegulatedAIWorkflow.Core.csproj" />
+  <Project Path="src/RegulatedAIWorkflow.Infrastructure/RegulatedAIWorkflow.Infrastructure.csproj" />
   <Project Path="tests/RegulatedAIWorkflow.Tests/RegulatedAIWorkflow.Tests.csproj" />
 </Solution>
