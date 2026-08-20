@@ -16,8 +16,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\RegulatedAIWorkflow.Api\RegulatedAIWorkflow.Api.csproj" />
     <ProjectReference Include="..\..\src\RegulatedAIWorkflow.Core\RegulatedAIWorkflow.Core.csproj" />
+    <ProjectReference Include="..\..\src\RegulatedAIWorkflow.Infrastructure\RegulatedAIWorkflow.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
