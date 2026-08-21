@@ -13,6 +13,7 @@ namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
 /// <param name="MissingEvidence">Evidence gaps considered by the assessment.</param>
 /// <param name="RequiresApproval">Whether an independent approval is required.</param>
 /// <param name="ActionStatus">The resulting blocked action status.</param>
+/// <param name="AuditEventIds">The identifiers of audit events persisted for this workflow response.</param>
 public sealed record WorkflowRunResult(
     Guid WorkflowId,
     RiskLevel RiskLevel,
@@ -21,4 +22,5 @@ public sealed record WorkflowRunResult(
     IReadOnlyList<Citation> Citations,
     IReadOnlyList<MissingEvidenceItem> MissingEvidence,
     bool RequiresApproval,
-    ActionStatus ActionStatus);
+    ActionStatus ActionStatus,
+    IReadOnlyList<Guid> AuditEventIds);

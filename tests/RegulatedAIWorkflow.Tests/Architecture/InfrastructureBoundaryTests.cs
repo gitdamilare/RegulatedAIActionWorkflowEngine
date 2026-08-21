@@ -1,5 +1,6 @@
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Ports;
+using RegulatedAIWorkflow.Infrastructure.Audit;
 using RegulatedAIWorkflow.Infrastructure.Evidence;
 
 namespace RegulatedAIWorkflow.Tests.Architecture;
@@ -39,5 +40,6 @@ public sealed class InfrastructureBoundaryTests
         references.ShouldNotContain(name =>
             name != null && name.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal));
         typeof(IEvidenceRepository).IsAssignableFrom(typeof(InMemoryEvidenceRepository)).ShouldBeTrue();
+        typeof(IAuditSink).IsAssignableFrom(typeof(InMemoryAuditSink)).ShouldBeTrue();
     }
 }
