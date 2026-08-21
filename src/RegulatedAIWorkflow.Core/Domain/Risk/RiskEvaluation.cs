@@ -9,7 +9,8 @@ namespace RegulatedAIWorkflow.Core.Domain.Risk;
 /// <param name="CitationReferences">Document identifiers supporting the reasons.</param>
 /// <param name="MissingEvidence">Evidence gaps considered by the assessment.</param>
 /// <param name="RequiresApproval">Whether an independent approval is required.</param>
-/// <param name="EvidenceIsAmbiguous">Whether the facts contain unresolved contradictions.</param>
+/// <param name="EvidenceIsAmbiguous">Whether trustworthy evidence or policy applicability is unresolved.</param>
+/// <param name="PolicyVersion">The stable version of the policy that produced the assessment.</param>
 public sealed record RiskEvaluation(
     RiskLevel RiskLevel,
     string Recommendation,
@@ -17,4 +18,5 @@ public sealed record RiskEvaluation(
     IReadOnlyList<RiskCitationReference> CitationReferences,
     IReadOnlyList<MissingEvidenceItem> MissingEvidence,
     bool RequiresApproval,
-    bool EvidenceIsAmbiguous);
+    bool EvidenceIsAmbiguous,
+    string PolicyVersion);
