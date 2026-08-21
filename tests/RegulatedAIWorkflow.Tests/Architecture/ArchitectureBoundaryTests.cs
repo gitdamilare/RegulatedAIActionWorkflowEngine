@@ -1,5 +1,6 @@
 using System.Reflection;
 using RegulatedAIWorkflow.Core.Application;
+using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
@@ -100,6 +101,29 @@ public sealed class ArchitectureBoundaryTests
             ruleReachableTypes.ShouldNotContain(typeof(EvidenceDocument));
             ruleReachableTypes.ShouldNotContain(typeof(UntrustedText));
         }
+    }
+
+    /// <summary>
+    /// Verifies the audit contract cannot carry request prose, evidence prose, exceptions, or idempotency secrets.
+    /// </summary>
+    [Fact]
+    public void GetProperties_AuditEvent_ContainsOnlySafeStructuredFields()
+    {
+        var properties = typeof(AuditEvent)
+            .GetProperties()
+            .ToDictionary(property => property.Name, StringComparer.Ordinal);
+
+        properties.Keys.ShouldNotContain("Question");
+        properties.Keys.ShouldNotContain("Snippet");
+        properties.Keys.ShouldNotContain("IdempotencyKey");
+        properties.Keys.ShouldNotContain("Exception");
+
+        var reachableTypes = GetReachableContractTypes(typeof(AuditEvent));
+        reachableTypes.ShouldNotContain(typeof(WorkflowCommand));
+        reachableTypes.ShouldNotContain(typeof(Citation));
+        reachableTypes.ShouldNotContain(typeof(EvidenceDocument));
+        reachableTypes.ShouldNotContain(typeof(UntrustedText));
+        reachableTypes.ShouldNotContain(typeof(Exception));
     }
 
     private static HashSet<Type> GetReachableContractTypes(Type rootType)

@@ -5,6 +5,9 @@ namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
 /// </summary>
 public enum ActionStatus
 {
+    /// <summary>The workflow request was malformed or exceeded a supported bound.</summary>
+    BlockedInvalidRequest,
+
     /// <summary>The caller is not authorized to request the action.</summary>
     BlockedUnauthorized,
 
@@ -12,5 +15,8 @@ public enum ActionStatus
     BlockedPendingApproval,
 
     /// <summary>Trustworthy evidence was unavailable or inconsistent.</summary>
-    BlockedEvidenceUnavailable
+    BlockedEvidenceUnavailable,
+
+    /// <summary>The evidence was valid, but action execution is not available.</summary>
+    BlockedExecutionUnavailable
 }
