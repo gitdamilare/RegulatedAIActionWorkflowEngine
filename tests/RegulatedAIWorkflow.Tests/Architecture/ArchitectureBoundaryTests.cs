@@ -1,4 +1,5 @@
 using System.Reflection;
+using RegulatedAIWorkflow.Core.Application;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
@@ -38,6 +39,17 @@ public sealed class ArchitectureBoundaryTests
 
         evaluate.Name.ShouldBe(nameof(IRiskEvaluator.EvaluateRisk));
         parameter.ParameterType.ShouldBe(typeof(RiskEvaluationInput));
+        typeof(IRiskEvaluator).IsAssignableFrom(typeof(DeterministicRiskEvaluator)).ShouldBeTrue();
+
+        var concreteEvaluate = typeof(DeterministicRiskEvaluator)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .ShouldHaveSingleItem();
+        concreteEvaluate.Name.ShouldBe(nameof(DeterministicRiskEvaluator.EvaluateRisk));
+        concreteEvaluate.GetParameters().ShouldHaveSingleItem().ParameterType
+            .ShouldBe(typeof(RiskEvaluationInput));
+        typeof(DeterministicRiskEvaluator)
+            .GetMember("PolicyVersion", BindingFlags.Public | BindingFlags.Static)
+            .ShouldBeEmpty();
 
         var inputProperties = typeof(RiskEvaluationInput)
             .GetProperties()
@@ -63,6 +75,31 @@ public sealed class ArchitectureBoundaryTests
 
         reachableTypes.ShouldNotContain(typeof(EvidenceDocument));
         reachableTypes.ShouldNotContain(typeof(UntrustedText));
+
+        var coreAssembly = typeof(DeterministicRiskEvaluator).Assembly;
+        var ruleContract = coreAssembly.GetType(
+            "RegulatedAIWorkflow.Core.Application.Risk.IRiskRule");
+        ruleContract.ShouldNotBeNull();
+        ruleContract.IsPublic.ShouldBeFalse();
+
+        var ruleTypes = coreAssembly.GetTypes()
+            .Where(type =>
+                type is { IsClass: true, IsAbstract: false } &&
+                ruleContract.IsAssignableFrom(type))
+            .ToArray();
+        ruleTypes.ShouldNotBeEmpty();
+
+        foreach (var ruleType in ruleTypes)
+        {
+            var ruleEvaluate = ruleType
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .ShouldHaveSingleItem();
+            var ruleInput = ruleEvaluate.GetParameters().ShouldHaveSingleItem().ParameterType;
+            var ruleReachableTypes = GetReachableContractTypes(ruleInput);
+
+            ruleReachableTypes.ShouldNotContain(typeof(EvidenceDocument));
+            ruleReachableTypes.ShouldNotContain(typeof(UntrustedText));
+        }
     }
 
     private static HashSet<Type> GetReachableContractTypes(Type rootType)
