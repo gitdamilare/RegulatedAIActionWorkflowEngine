@@ -115,6 +115,7 @@ public sealed class ArchitectureBoundaryTests
 
         properties.Keys.ShouldNotContain("Question");
         properties.Keys.ShouldNotContain("Snippet");
+        properties.Keys.ShouldNotContain("EvidenceSetHash");
         properties.Keys.ShouldNotContain("IdempotencyKey");
         properties.Keys.ShouldNotContain("Exception");
 

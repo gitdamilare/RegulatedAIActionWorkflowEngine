@@ -21,4 +21,6 @@ public sealed record AuditEvent(
     IReadOnlyList<string> ReferencedDocumentIds,
     IReadOnlyList<string> ReasonCodes,
     IReadOnlyList<string> MissingEvidenceCodes,
-    string? PolicyVersion);
+    string? PolicyVersion,
+    string? ApprovalId,
+    string? ApproverUserId);

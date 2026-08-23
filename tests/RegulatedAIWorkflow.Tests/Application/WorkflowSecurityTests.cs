@@ -58,7 +58,9 @@ public sealed class WorkflowSecurityTests
             (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(question: new string('q', 2_001))),
             (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(question: "question\nsecret")),
             (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(action: WorkflowAction.Unknown)),
-            (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(action: (WorkflowAction)999))
+            (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(action: (WorkflowAction)999)),
+            (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(approvalId: " approval ")),
+            (WorkflowTestHarness.Principal(), WorkflowTestHarness.Command(approvalId: new string('a', 129)))
         };
 
         foreach (var request in invalidRequests)
@@ -196,10 +198,10 @@ public sealed class WorkflowSecurityTests
     }
 
     /// <summary>
-    /// Verifies valid medium risk remains blocked without claiming approval is required.
+    /// Verifies valid medium risk executes without claiming approval is required.
     /// </summary>
     [Fact]
-    public async Task RunAsync_MediumRiskValidEvidence_ReturnsExecutionUnavailable()
+    public async Task RunAsync_MediumRiskValidEvidence_ExecutesWithoutApproval()
     {
         var harness = new WorkflowTestHarness();
 
@@ -207,9 +209,10 @@ public sealed class WorkflowSecurityTests
             WorkflowTestHarness.Principal(),
             WorkflowTestHarness.Command(vendorId: "lakeshore-analytics"));
 
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedExecutionUnavailable);
+        result.ActionStatus.ShouldBe(ActionStatus.Executed);
         result.RiskLevel.ShouldBe(RiskLevel.Medium);
         result.RequiresApproval.ShouldBeFalse();
+        harness.ActionExecutor.Executions.Count.ShouldBe(1);
     }
 
     /// <summary>

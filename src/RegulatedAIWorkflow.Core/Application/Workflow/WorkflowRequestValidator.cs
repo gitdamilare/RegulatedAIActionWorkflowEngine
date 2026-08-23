@@ -23,6 +23,7 @@ internal static class WorkflowRequestValidator
             !IsValidIdentifier(command.VendorId) ||
             !Enum.IsDefined(command.RequestedAction) ||
             command.RequestedAction is WorkflowAction.Unknown ||
+            !IsValidOptionalIdentifier(command.ApprovalId) ||
             !IsValidQuestion(command.Question))
         {
             return null;
@@ -33,7 +34,8 @@ internal static class WorkflowRequestValidator
             principal.UserId,
             principal.Role,
             command.VendorId!,
-            command.RequestedAction);
+            command.RequestedAction,
+            command.ApprovalId);
     }
 
     internal static string? SafeIdentifierOrNull(string? value) =>
@@ -44,6 +46,9 @@ internal static class WorkflowRequestValidator
         value.Length <= MaximumIdentifierLength &&
         string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
         !value.Any(char.IsControl);
+
+    private static bool IsValidOptionalIdentifier(string? value) =>
+        value is null || IsValidIdentifier(value);
 
     private static bool IsValidQuestion(string? value) =>
         value is null ||
@@ -58,4 +63,5 @@ internal sealed record ValidatedWorkflowRequest(
     string UserId,
     UserRole Role,
     string VendorId,
-    WorkflowAction RequestedAction);
+    WorkflowAction RequestedAction,
+    string? ApprovalId);

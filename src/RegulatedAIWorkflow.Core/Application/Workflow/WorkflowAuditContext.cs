@@ -28,4 +28,8 @@ internal sealed class WorkflowAuditContext(Guid workflowId)
     public IReadOnlyList<string> ReasonCodes { get; set; } = [];
 
     public IReadOnlyList<string> MissingEvidenceCodes { get; set; } = [];
+
+    public string? ApprovalId { get; set; }
+
+    public string? ApproverUserId { get; set; }
 }

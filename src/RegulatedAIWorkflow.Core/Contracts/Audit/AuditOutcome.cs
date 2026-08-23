@@ -5,6 +5,15 @@ namespace RegulatedAIWorkflow.Core.Contracts.Audit;
 /// </summary>
 public enum AuditOutcome
 {
+    /// <summary>A new approval was bound and stored.</summary>
+    ApprovalRecorded,
+
+    /// <summary>A stored approval matched every current binding.</summary>
+    ApprovalAccepted,
+
+    /// <summary>An approval issuance or verification was rejected.</summary>
+    ApprovalRejected,
+
     /// <summary>The request failed bounded validation.</summary>
     InvalidRequest,
 
@@ -19,6 +28,12 @@ public enum AuditOutcome
 
     /// <summary>A valid lower-risk decision remains blocked because execution is unavailable.</summary>
     BlockedExecutionUnavailable,
+
+    /// <summary>Every applicable gate passed and execution may begin.</summary>
+    AuthorizedForExecution,
+
+    /// <summary>The regulated action executor reported success.</summary>
+    Executed,
 
     /// <summary>The workflow failed unexpectedly.</summary>
     Failed

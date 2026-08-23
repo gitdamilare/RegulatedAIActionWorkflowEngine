@@ -6,7 +6,9 @@ namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
 /// <param name="VendorId">The requested vendor identifier.</param>
 /// <param name="Question">The caller's optional question, which has no policy authority.</param>
 /// <param name="RequestedAction">The action to evaluate.</param>
+/// <param name="ApprovalId">The optional stored approval to verify before high-risk execution.</param>
 public sealed record WorkflowCommand(
     string? VendorId,
     string? Question,
-    WorkflowAction RequestedAction);
+    WorkflowAction RequestedAction,
+    string? ApprovalId = null);
