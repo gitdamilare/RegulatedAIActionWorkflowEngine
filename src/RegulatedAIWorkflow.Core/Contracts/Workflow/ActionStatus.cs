@@ -1,7 +1,7 @@
 namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
 
 /// <summary>
-/// Describes why a workflow did not execute an action.
+/// Describes the resulting state of a requested workflow action.
 /// </summary>
 public enum ActionStatus
 {
@@ -18,5 +18,8 @@ public enum ActionStatus
     BlockedEvidenceUnavailable,
 
     /// <summary>The evidence was valid, but action execution is not available.</summary>
-    BlockedExecutionUnavailable
+    BlockedExecutionUnavailable,
+
+    /// <summary>The regulated action was executed after all applicable gates passed.</summary>
+    Executed
 }

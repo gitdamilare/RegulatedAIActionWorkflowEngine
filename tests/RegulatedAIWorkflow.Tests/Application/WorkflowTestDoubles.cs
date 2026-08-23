@@ -1,12 +1,18 @@
 using RegulatedAIWorkflow.Core.Application;
+using RegulatedAIWorkflow.Core.Application.Approval;
 using RegulatedAIWorkflow.Core.Application.Workflow;
+using RegulatedAIWorkflow.Core.Contracts.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Approval;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
+using RegulatedAIWorkflow.Core.Domain.Execution;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Core.Ports;
+using RegulatedAIWorkflow.Infrastructure.Approval;
 using RegulatedAIWorkflow.Infrastructure.Audit;
 using RegulatedAIWorkflow.Infrastructure.Evidence;
+using RegulatedAIWorkflow.Infrastructure.Execution;
 
 namespace RegulatedAIWorkflow.Tests.Application;
 
@@ -19,15 +25,52 @@ internal sealed class WorkflowTestHarness
 
     internal InMemoryAuditSink AuditSink { get; } = new();
 
+    internal InMemoryApprovalRepository ApprovalRepository { get; } = new();
+
+    internal InMemoryActionExecutor ActionExecutor { get; } = new();
+
     internal WorkflowOrchestrator CreateOrchestrator(
         IEvidenceRepository? evidenceRepository = null,
         IRiskEvaluator? riskEvaluator = null,
-        IAuditSink? auditSink = null) =>
+        IAuditSink? auditSink = null,
+        IApprovalRepository? approvalRepository = null,
+        IActionExecutor? actionExecutor = null,
+        TimeProvider? timeProvider = null)
+    {
+        var approvals = approvalRepository ?? ApprovalRepository;
+        var clock = timeProvider ?? TimeProvider;
+        return new(
+            evidenceRepository ?? new InMemoryEvidenceRepository(),
+            riskEvaluator ?? new DeterministicRiskEvaluator(),
+            new ApprovalGate(approvals, clock),
+            auditSink ?? AuditSink,
+            actionExecutor ?? ActionExecutor,
+            clock);
+    }
+
+    internal ApprovalIssuer CreateApprovalIssuer(
+        IEvidenceRepository? evidenceRepository = null,
+        IRiskEvaluator? riskEvaluator = null,
+        IApprovalRepository? approvalRepository = null,
+        IAuditSink? auditSink = null,
+        TimeProvider? timeProvider = null) =>
         new(
             evidenceRepository ?? new InMemoryEvidenceRepository(),
             riskEvaluator ?? new DeterministicRiskEvaluator(),
+            approvalRepository ?? ApprovalRepository,
             auditSink ?? AuditSink,
-            TimeProvider);
+            timeProvider ?? TimeProvider);
+
+    internal Task<ApprovalIssueResult> IssueApprovalAsync(
+        WorkflowPrincipal? approver = null,
+        string vendorId = "silverline-payments",
+        int validForHours = 24) =>
+        CreateApprovalIssuer().IssueAsync(
+            approver ?? Principal(UserRole.RiskApprover, userId: "risk-approver"),
+            new IssueApprovalCommand(
+                vendorId,
+                WorkflowAction.MarkVendorApproved,
+                validForHours));
 
     internal static WorkflowPrincipal Principal(
         UserRole role = UserRole.ProcurementManager,
@@ -38,8 +81,9 @@ internal sealed class WorkflowTestHarness
     internal static WorkflowCommand Command(
         string? vendorId = "silverline-payments",
         string? question = null,
-        WorkflowAction action = WorkflowAction.MarkVendorApproved) =>
-        new(vendorId, question, action);
+        WorkflowAction action = WorkflowAction.MarkVendorApproved,
+        string? approvalId = null) =>
+        new(vendorId, question, action, approvalId);
 
     internal static EvidenceSearchResult Evidence(string snippet = "Trusted display evidence.") =>
         new(
@@ -67,7 +111,8 @@ internal sealed class WorkflowTestHarness
 
     internal static RiskEvaluation HighEvaluation(
         IReadOnlyList<RiskCitationReference>? references = null,
-        bool evidenceIsAmbiguous = false) =>
+        bool evidenceIsAmbiguous = false,
+        string policyVersion = "test-policy-1") =>
         new(
             RiskLevel.High,
             "Do not approve yet.",
@@ -76,7 +121,7 @@ internal sealed class WorkflowTestHarness
             [new MissingEvidenceItem("TEST_CONTROL", "A required control is missing.")],
             RequiresApproval: true,
             evidenceIsAmbiguous,
-            PolicyVersion: "test-policy-1");
+            PolicyVersion: policyVersion);
 
     internal static RiskEvaluation MediumEvaluation() =>
         new(
@@ -92,7 +137,11 @@ internal sealed class WorkflowTestHarness
 
 internal sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
 {
-    public override DateTimeOffset GetUtcNow() => utcNow;
+    private DateTimeOffset currentUtc = utcNow;
+
+    public override DateTimeOffset GetUtcNow() => currentUtc;
+
+    internal void Advance(TimeSpan duration) => currentUtc = currentUtc.Add(duration);
 }
 
 internal sealed class StubEvidenceRepository(
@@ -149,4 +198,35 @@ internal sealed class ThrowingAuditSink(Exception exception) : IAuditSink
         CallCount++;
         throw exception;
     }
+}
+
+internal sealed class RecordingActionExecutor(IList<string>? sequence = null) : IActionExecutor
+{
+    internal List<ActionExecutionRequest> Executions { get; } = [];
+
+    internal int CallCount => Executions.Count;
+
+    internal bool Succeeds { get; set; } = true;
+
+    public Task<ActionExecutionResult> ExecuteAsync(
+        ActionExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Executions.Add(request);
+        sequence?.Add("execute");
+        return Task.FromResult(new ActionExecutionResult(Succeeds));
+    }
+}
+
+internal sealed class LeakyApprovalRepository(ApprovalRecord approval) : IApprovalRepository
+{
+    public Task SaveAsync(ApprovalRecord record, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task<ApprovalRecord?> FindAsync(
+        string tenantId,
+        string approvalId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<ApprovalRecord?>(approval);
 }

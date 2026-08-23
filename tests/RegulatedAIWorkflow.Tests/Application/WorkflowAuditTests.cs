@@ -30,18 +30,25 @@ public sealed class WorkflowAuditTests
             sequence);
         var harness = new WorkflowTestHarness();
         var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
+        var actionExecutor = new RecordingActionExecutor(sequence);
 
-        var result = await harness.CreateOrchestrator(repository, evaluator, auditSink).RunAsync(
+        var result = await harness.CreateOrchestrator(
+            repository,
+            evaluator,
+            auditSink,
+            actionExecutor: actionExecutor).RunAsync(
             WorkflowTestHarness.Principal(),
             WorkflowTestHarness.Command());
 
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedExecutionUnavailable);
+        result.ActionStatus.ShouldBe(ActionStatus.Executed);
         sequence.ShouldBe(
         [
             "retrieve",
             "evaluate",
-            "audit:ActionAttempt:BlockedExecutionUnavailable",
-            "audit:WorkflowCompleted:BlockedExecutionUnavailable"
+            "audit:ActionAttempt:AuthorizedForExecution",
+            "execute",
+            "audit:ActionExecution:Executed",
+            "audit:WorkflowCompleted:Executed"
         ]);
     }
 
@@ -172,5 +179,6 @@ public sealed class WorkflowAuditTests
 
         actual.ShouldBeSameAs(expected);
         auditSink.CallCount.ShouldBe(2);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
     }
 }

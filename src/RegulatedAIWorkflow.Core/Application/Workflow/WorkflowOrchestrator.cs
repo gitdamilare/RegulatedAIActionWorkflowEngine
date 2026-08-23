@@ -1,22 +1,27 @@
+using RegulatedAIWorkflow.Core.Application.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Approval;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
+using RegulatedAIWorkflow.Core.Domain.Execution;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Core.Application.Workflow;
 
 /// <summary>
-/// Runs the blocked-only workflow through its trust and policy gates in order.
+/// Runs the workflow through its trust, policy, approval, audit, and execution gates in order.
 /// </summary>
 public sealed class WorkflowOrchestrator(
     IEvidenceRepository evidenceRepository,
     IRiskEvaluator riskEvaluator,
+    ApprovalGate approvalGate,
     IAuditSink auditSink,
+    IActionExecutor actionExecutor,
     TimeProvider timeProvider)
 {
     /// <summary>
-    /// Validates, authorizes, assesses, verifies, and audits a workflow request.
+    /// Validates, authorizes, assesses, verifies, audits, and conditionally executes a workflow request.
     /// </summary>
     public async Task<WorkflowRunResult> RunAsync(
         WorkflowPrincipal? principal,
@@ -30,7 +35,8 @@ public sealed class WorkflowOrchestrator(
             ActorUserId = WorkflowRequestValidator.SafeIdentifierOrNull(principal?.UserId),
             ActorRole = ValidateUserRole(principal),
             VendorId = WorkflowRequestValidator.SafeIdentifierOrNull(command?.VendorId),
-            RequestedAction = ValidateWorkflowCommand(command)
+            RequestedAction = ValidateWorkflowCommand(command),
+            ApprovalId = WorkflowRequestValidator.SafeIdentifierOrNull(command?.ApprovalId)
         };
 
         try
@@ -53,6 +59,7 @@ public sealed class WorkflowOrchestrator(
             auditContext.ActorRole = validated.Role;
             auditContext.VendorId = validated.VendorId;
             auditContext.RequestedAction = validated.RequestedAction;
+            auditContext.ApprovalId = validated.ApprovalId;
 
             // Stage 2: Authorize before any evidence can be retrieved or evaluated.
             if (!ActionAuthorizationPolicy.MayAttempt(validated.Role, validated.RequestedAction))
@@ -130,24 +137,89 @@ public sealed class WorkflowOrchestrator(
 
             if (evaluation.RequiresApproval)
             {
-                return await CompleteAsync(
+                var evidenceSetHash = CanonicalEvidenceHasher.Compute(
+                    validated.TenantId,
+                    validated.VendorId,
+                    scoped.Evidence,
+                    evaluation.PolicyVersion);
+                var approval = await approvalGate.EvaluateAsync(
+                    new ApprovalVerificationRequest(
+                        new WorkflowPrincipal(
+                            validated.TenantId,
+                            validated.UserId,
+                            validated.Role),
+                        validated.VendorId,
+                        validated.RequestedAction,
+                        evidenceSetHash,
+                        evaluation.PolicyVersion,
+                        validated.ApprovalId),
+                    cancellationToken);
+
+                auditContext.ApproverUserId = approval.Approval?.ApproverUserId;
+                if (!approval.IsApproved)
+                {
+                    auditContext.ReasonCodes =
+                    [
+                        .. auditContext.ReasonCodes,
+                        ApprovalReasonCode(approval.Outcome)
+                    ];
+
+                    if (validated.ApprovalId is not null)
+                    {
+                        await WriteAuditAsync(
+                            auditContext,
+                            AuditEventType.ApprovalDecision,
+                            AuditOutcome.ApprovalRejected);
+                    }
+
+                    return await CompleteAsync(
+                        auditContext,
+                        CreateAssessedResult(
+                            workflowId,
+                            evaluation,
+                            citations,
+                            ActionStatus.BlockedPendingApproval),
+                        AuditOutcome.BlockedPendingApproval);
+                }
+
+                await WriteAuditAsync(
                     auditContext,
-                    CreateAssessedResult(
-                        workflowId,
-                        evaluation,
-                        citations,
-                        ActionStatus.BlockedPendingApproval),
-                    AuditOutcome.BlockedPendingApproval);
+                    AuditEventType.ApprovalDecision,
+                    AuditOutcome.ApprovalAccepted);
             }
 
-            return await CompleteAsync(
+            // Stage 7: Persist authorization before any regulated side effect can begin.
+            await WriteAuditAsync(
+                auditContext,
+                AuditEventType.ActionAttempt,
+                AuditOutcome.AuthorizedForExecution);
+
+            // Stage 8: Execute only after every applicable gate and mandatory audit write passed.
+            var execution = await actionExecutor.ExecuteAsync(
+                new ActionExecutionRequest(
+                    workflowId,
+                    validated.TenantId,
+                    validated.VendorId,
+                    validated.UserId,
+                    validated.RequestedAction),
+                cancellationToken);
+            if (!execution.Succeeded)
+            {
+                throw new InvalidOperationException("The action executor reported failure.");
+            }
+
+            await WriteAuditAsync(
+                auditContext,
+                AuditEventType.ActionExecution,
+                AuditOutcome.Executed);
+
+            return await CompleteExecutedAsync(
                 auditContext,
                 CreateAssessedResult(
                     workflowId,
                     evaluation,
                     citations,
-                    ActionStatus.BlockedExecutionUnavailable),
-                AuditOutcome.BlockedExecutionUnavailable);
+                    ActionStatus.Executed));
         }
         catch
         {
@@ -202,6 +274,17 @@ public sealed class WorkflowOrchestrator(
         return result with { AuditEventIds = auditContext.EventIds.ToArray() };
     }
 
+    private async Task<WorkflowRunResult> CompleteExecutedAsync(
+        WorkflowAuditContext auditContext,
+        WorkflowRunResult result)
+    {
+        await WriteAuditAsync(
+            auditContext,
+            AuditEventType.WorkflowCompleted,
+            AuditOutcome.Executed);
+        return result with { AuditEventIds = auditContext.EventIds.ToArray() };
+    }
+
     private async Task WriteAuditAsync(
         WorkflowAuditContext auditContext,
         AuditEventType eventType,
@@ -223,7 +306,9 @@ public sealed class WorkflowOrchestrator(
             auditContext.ReferencedDocumentIds,
             auditContext.ReasonCodes,
             auditContext.MissingEvidenceCodes,
-            auditContext.PolicyVersion);
+            auditContext.PolicyVersion,
+            auditContext.ApprovalId,
+            auditContext.ApproverUserId);
 
         await auditSink.WriteAuditEventAsync(auditEvent, CancellationToken.None);
         auditContext.EventIds.Add(eventId);
@@ -238,4 +323,19 @@ public sealed class WorkflowOrchestrator(
         principal is not null && Enum.IsDefined(principal.Role)
             ? principal.Role
             : UserRole.Unknown;
+
+    private static string ApprovalReasonCode(ApprovalOutcome outcome) => outcome switch
+    {
+        ApprovalOutcome.Missing => WorkflowAuditCodes.ApprovalMissing,
+        ApprovalOutcome.NotFound => WorkflowAuditCodes.ApprovalNotFound,
+        ApprovalOutcome.ActionMismatch => WorkflowAuditCodes.ApprovalActionMismatch,
+        ApprovalOutcome.VendorMismatch => WorkflowAuditCodes.ApprovalVendorMismatch,
+        ApprovalOutcome.PolicySuperseded => WorkflowAuditCodes.ApprovalPolicySuperseded,
+        ApprovalOutcome.EvidenceSuperseded => WorkflowAuditCodes.ApprovalEvidenceSuperseded,
+        ApprovalOutcome.NotYetValid => WorkflowAuditCodes.ApprovalNotYetValid,
+        ApprovalOutcome.Expired => WorkflowAuditCodes.ApprovalExpired,
+        ApprovalOutcome.SelfApproval => WorkflowAuditCodes.ApprovalSelfApproval,
+        ApprovalOutcome.WrongRole => WorkflowAuditCodes.ApprovalWrongRole,
+        _ => throw new InvalidOperationException("A valid approval cannot produce a rejection code.")
+    };
 }
