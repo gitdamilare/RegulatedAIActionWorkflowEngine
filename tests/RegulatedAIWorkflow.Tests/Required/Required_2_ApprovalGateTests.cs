@@ -6,14 +6,40 @@ using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Core.Ports;
 using RegulatedAIWorkflow.Infrastructure.Approval;
 using RegulatedAIWorkflow.Infrastructure.Evidence;
+using RegulatedAIWorkflow.Tests.Application;
 
-namespace RegulatedAIWorkflow.Tests.Application;
+namespace RegulatedAIWorkflow.Tests.Required;
 
 /// <summary>
-/// Verifies approval gating, supersession, execution, and audit ordering end to end.
+/// Required test 2: the server-owned action policy classifies vendor approval as high risk and
+/// requires a current, independent, evidence-bound approval before execution. Executor invocation
+/// assertions are the proof that rejected approvals caused no regulated effect.
 /// </summary>
-public sealed class WorkflowApprovalTests
+public sealed class Required_2_ApprovalGateTests
 {
+    /// <summary>Verifies each policy-authorized requester reaches the real high-risk approval gate.</summary>
+    [Theory]
+    [InlineData(UserRole.ProcurementManager)]
+    [InlineData(UserRole.ComplianceOfficer)]
+    public async Task RunAsync_AuthorizedRoleWithHighRiskEvidence_ReturnsPendingApproval(UserRole role)
+    {
+        var harness = new WorkflowTestHarness();
+
+        var result = await harness.CreateOrchestrator().RunAsync(
+            WorkflowTestHarness.Principal(role),
+            WorkflowTestHarness.Command());
+
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        result.RiskLevel.ShouldBe(RiskLevel.High);
+        result.RequiresApproval.ShouldBeTrue();
+        result.Citations.Select(citation => citation.DocumentId).ShouldBe(
+            ["northstar-policy-002", "northstar-silverline-contract"]);
+        result.AuditEventIds.Count.ShouldBe(2);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
+        harness.AuditSink.Events.Select(item => item.Outcome).ShouldBe(
+            [AuditOutcome.BlockedPendingApproval, AuditOutcome.BlockedPendingApproval]);
+    }
+
     /// <summary>High-risk execution remains blocked when no approval is supplied.</summary>
     [Fact]
     public async Task RunAsync_MissingApproval_DoesNotCallExecutor()
@@ -132,8 +158,7 @@ public sealed class WorkflowApprovalTests
 
         result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
-        harness.AuditSink.Events.ShouldContain(item =>
-            item.Outcome == AuditOutcome.ApprovalRejected);
+        harness.AuditSink.Events.ShouldContain(item => item.Outcome == AuditOutcome.ApprovalRejected);
     }
 
     /// <summary>Document or typed-fact changes supersede the stored approval.</summary>
@@ -155,9 +180,7 @@ public sealed class WorkflowApprovalTests
         result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
         harness.AuditSink.Events.ShouldContain(item =>
-            item.ReasonCodes.Contains(
-                WorkflowAuditCodes.ApprovalEvidenceSuperseded,
-                StringComparer.Ordinal));
+            item.ReasonCodes.Contains(WorkflowAuditCodes.ApprovalEvidenceSuperseded, StringComparer.Ordinal));
     }
 
     /// <summary>Policy supersession is reported before the policy-bound hash mismatch.</summary>
@@ -177,59 +200,42 @@ public sealed class WorkflowApprovalTests
         result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
         harness.AuditSink.Events.ShouldContain(item =>
-            item.ReasonCodes.Contains(
-                WorkflowAuditCodes.ApprovalPolicySuperseded,
-                StringComparer.Ordinal));
+            item.ReasonCodes.Contains(WorkflowAuditCodes.ApprovalPolicySuperseded, StringComparer.Ordinal));
     }
 
-    /// <summary>Accepted approval and authorization are audited before the side effect.</summary>
+    /// <summary>Complete evidence cannot lower the action-policy floor or bypass approval.</summary>
     [Fact]
-    public async Task RunAsync_ValidApproval_AuditsExpectedExecutionOrder()
-    {
-        var harness = new WorkflowTestHarness();
-        var approval = await harness.IssueApprovalAsync();
-        var sequence = new List<string>();
-        var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
-        var executor = new RecordingActionExecutor(sequence);
-
-        await harness.CreateOrchestrator(
-            auditSink: auditSink,
-            actionExecutor: executor).RunAsync(
-                WorkflowTestHarness.Principal(),
-                WorkflowTestHarness.Command(approvalId: approval.ApprovalId));
-
-        sequence.ShouldBe(
-        [
-            "audit:ApprovalDecision:ApprovalAccepted",
-            "audit:ActionAttempt:AuthorizedForExecution",
-            "execute",
-            "audit:ActionExecution:Executed",
-            "audit:WorkflowCompleted:Executed"
-        ]);
-    }
-
-    /// <summary>A supplied unknown approval is audited as rejected before the blocked attempt.</summary>
-    [Fact]
-    public async Task RunAsync_UnknownApproval_AuditsRejectionBeforeBlockedAttempt()
+    public async Task RunAsync_CompleteEvidence_RequiresApprovalBeforeExecution()
     {
         var harness = new WorkflowTestHarness();
 
-        var result = await harness.CreateOrchestrator().RunAsync(
+        var blocked = await harness.CreateOrchestrator().RunAsync(
             WorkflowTestHarness.Principal(),
-            WorkflowTestHarness.Command(approvalId: "unknown-approval"));
+            WorkflowTestHarness.Command(vendorId: "lakeshore-analytics"));
 
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        blocked.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        blocked.RiskLevel.ShouldBe(RiskLevel.High);
+        blocked.RequiresApproval.ShouldBeTrue();
+        blocked.Reasons.Select(reason => reason.Code).ShouldBe(
+            ["ACTION_MARK_VENDOR_APPROVED_HIGH_RISK"]);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
-        harness.AuditSink.Events.Select(item => (item.EventType, item.Outcome)).ShouldBe(
-        [
-            (AuditEventType.ApprovalDecision, AuditOutcome.ApprovalRejected),
-            (AuditEventType.ActionAttempt, AuditOutcome.BlockedPendingApproval),
-            (AuditEventType.WorkflowCompleted, AuditOutcome.BlockedPendingApproval)
-        ]);
+
+        var approval = await harness.IssueApprovalAsync(vendorId: "lakeshore-analytics");
+        var executed = await harness.CreateOrchestrator().RunAsync(
+            WorkflowTestHarness.Principal(),
+            WorkflowTestHarness.Command(
+                vendorId: "lakeshore-analytics",
+                approvalId: approval.ApprovalId));
+
+        executed.ActionStatus.ShouldBe(ActionStatus.Executed);
+        executed.RiskLevel.ShouldBe(RiskLevel.High);
+        executed.RequiresApproval.ShouldBeTrue();
+        executed.Recommendation.ShouldBe(
+            "Proceeded under recorded approval. The action remains classified as high risk.");
+        harness.ActionExecutor.Executions.Count.ShouldBe(1);
     }
 
-    private sealed class ChangedDocumentEvidenceRepository(IEvidenceRepository inner)
-        : IEvidenceRepository
+    private sealed class ChangedDocumentEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
     {
         public async Task<EvidenceSearchResult> SearchEvidenceAsync(
             EvidenceQuery query,
@@ -245,8 +251,7 @@ public sealed class WorkflowApprovalTests
         }
     }
 
-    private sealed class ChangedFactEvidenceRepository(IEvidenceRepository inner)
-        : IEvidenceRepository
+    private sealed class ChangedFactEvidenceRepository(IEvidenceRepository inner) : IEvidenceRepository
     {
         public async Task<EvidenceSearchResult> SearchEvidenceAsync(
             EvidenceQuery query,
@@ -258,9 +263,7 @@ public sealed class WorkflowApprovalTests
                 query.VendorId,
                 evidence.Documents[0].DocumentId,
                 EvidenceFactType.Soc2Available);
-            return new EvidenceSearchResult(
-                evidence.Documents,
-                [.. evidence.Facts, addedFact]);
+            return new EvidenceSearchResult(evidence.Documents, [.. evidence.Facts, addedFact]);
         }
     }
 }

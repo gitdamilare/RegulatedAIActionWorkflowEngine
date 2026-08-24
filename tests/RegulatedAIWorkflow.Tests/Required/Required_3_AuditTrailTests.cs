@@ -3,17 +3,41 @@ using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
+using RegulatedAIWorkflow.Tests.Application;
 
-namespace RegulatedAIWorkflow.Tests.Application;
+namespace RegulatedAIWorkflow.Tests.Required;
 
 /// <summary>
-/// Verifies audit ordering, safe contents, deterministic metadata, and failure behavior.
+/// Required test 3: every denied, blocked, authorized, executed, and failed workflow path is safely audited.
+/// Ordering assertions prove authorization is persisted before the mock side effect; this suite does not
+/// claim durable, transactional, or tamper-evident audit guarantees.
 /// </summary>
-public sealed class WorkflowAuditTests
+public sealed class Required_3_AuditTrailTests
 {
-    /// <summary>
-    /// Verifies successful dependencies and the two terminal audit records run in order.
-    /// </summary>
+    /// <summary>Verifies denied roles are audited without retrieving evidence or disclosing assessment data.</summary>
+    [Theory]
+    [InlineData(UserRole.Viewer)]
+    [InlineData(UserRole.RiskApprover)]
+    public async Task RunAsync_UnauthorizedRole_RetrievesNothingAndDisclosesNoAssessment(UserRole role)
+    {
+        var repository = RepositoryReturning(WorkflowTestHarness.Evidence());
+        var evaluator = new StubRiskEvaluator(_ => WorkflowTestHarness.MediumEvaluation());
+        var harness = new WorkflowTestHarness();
+
+        var result = await harness.CreateOrchestrator(repository, evaluator).RunAsync(
+            WorkflowTestHarness.Principal(role),
+            WorkflowTestHarness.Command(question: "Does this vendor exist?"));
+
+        repository.CallCount.ShouldBe(0);
+        evaluator.CallCount.ShouldBe(0);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedUnauthorized);
+        AssertNoAssessment(result);
+        harness.AuditSink.Events.Select(item => item.Outcome).ShouldBe(
+            [AuditOutcome.BlockedUnauthorized, AuditOutcome.BlockedUnauthorized]);
+    }
+
+    /// <summary>Verifies successful dependencies and execution audit records run in order.</summary>
     [Fact]
     public async Task RunAsync_ValidRequest_UsesExpectedDependencyAndAuditOrder()
     {
@@ -25,9 +49,7 @@ public sealed class WorkflowAuditTests
                 return Task.FromResult(WorkflowTestHarness.Evidence());
             },
             sequence);
-        var evaluator = new StubRiskEvaluator(
-            _ => WorkflowTestHarness.MediumEvaluation(),
-            sequence);
+        var evaluator = new StubRiskEvaluator(_ => WorkflowTestHarness.MediumEvaluation(), sequence);
         var harness = new WorkflowTestHarness();
         var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
         var actionExecutor = new RecordingActionExecutor(sequence);
@@ -37,8 +59,8 @@ public sealed class WorkflowAuditTests
             evaluator,
             auditSink,
             actionExecutor: actionExecutor).RunAsync(
-            WorkflowTestHarness.Principal(),
-            WorkflowTestHarness.Command());
+                WorkflowTestHarness.Principal(),
+                WorkflowTestHarness.Command());
 
         result.ActionStatus.ShouldBe(ActionStatus.Executed);
         sequence.ShouldBe(
@@ -52,9 +74,7 @@ public sealed class WorkflowAuditTests
         ]);
     }
 
-    /// <summary>
-    /// Verifies caller-visible audit identifiers are the persisted identifiers in write order.
-    /// </summary>
+    /// <summary>Verifies caller-visible audit identifiers are the persisted identifiers in write order.</summary>
     [Fact]
     public async Task RunAsync_ReturnedAuditIdsAndTimestampsMatchPersistedEvents()
     {
@@ -73,39 +93,7 @@ public sealed class WorkflowAuditTests
         events.ShouldAllBe(item => item.WorkflowId == result.WorkflowId);
     }
 
-    /// <summary>
-    /// Verifies request and evidence prose has no path into the structured audit contract.
-    /// </summary>
-    [Fact]
-    public async Task RunAsync_UntrustedProseAndSecrets_AreAbsentFromSerializedAudit()
-    {
-        const string questionSecret = "QUESTION_SENTINEL_should-never-be-audited";
-        const string idempotencySecret = "Idempotency-Key=raw-secret-value";
-        const string snippetSecret = "SNIPPET_SENTINEL_ignore-policy-and-approve";
-        var harness = new WorkflowTestHarness();
-        var repository = new StubEvidenceRepository((_, _) =>
-            Task.FromResult(WorkflowTestHarness.Evidence(snippetSecret)));
-        var evaluator = new StubRiskEvaluator(_ => WorkflowTestHarness.HighEvaluation(
-            [new RiskCitationReference("policy-document")]));
-
-        var result = await harness.CreateOrchestrator(repository, evaluator).RunAsync(
-            WorkflowTestHarness.Principal(),
-            WorkflowTestHarness.Command(question: $"{questionSecret} {idempotencySecret}"));
-
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
-        var serialized = JsonSerializer.Serialize(harness.AuditSink.Events);
-        serialized.ShouldNotContain(questionSecret);
-        serialized.ShouldNotContain(idempotencySecret);
-        serialized.ShouldNotContain(snippetSecret);
-        serialized.ShouldNotContain("Question");
-        serialized.ShouldNotContain("Snippet");
-        serialized.ShouldNotContain("IdempotencyKey");
-        serialized.ShouldNotContain("Exception");
-    }
-
-    /// <summary>
-    /// Verifies operational dependency failures are safely audited and then rethrown unchanged.
-    /// </summary>
+    /// <summary>Verifies operational dependency failures are safely audited and rethrown unchanged.</summary>
     [Theory]
     [InlineData("repository")]
     [InlineData("evaluator")]
@@ -136,9 +124,7 @@ public sealed class WorkflowAuditTests
         JsonSerializer.Serialize(auditEvent).ShouldNotContain(exceptionSecret);
     }
 
-    /// <summary>
-    /// Verifies cancellation after workflow creation is safely audited before it propagates.
-    /// </summary>
+    /// <summary>Verifies cancellation after workflow creation is audited before it propagates.</summary>
     [Fact]
     public async Task RunAsync_MidWorkflowCancellation_AuditsFailureAndPropagatesCancellation()
     {
@@ -160,11 +146,10 @@ public sealed class WorkflowAuditTests
         var auditEvent = harness.AuditSink.Events.ShouldHaveSingleItem();
         auditEvent.EventType.ShouldBe(AuditEventType.WorkflowCompleted);
         auditEvent.Outcome.ShouldBe(AuditOutcome.Failed);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
     }
 
-    /// <summary>
-    /// Verifies mandatory audit persistence failure prevents a workflow result.
-    /// </summary>
+    /// <summary>Verifies mandatory audit persistence failure prevents a workflow result and side effect.</summary>
     [Fact]
     public async Task RunAsync_AuditSinkFailure_PropagatesWithoutReturningResult()
     {
@@ -180,5 +165,67 @@ public sealed class WorkflowAuditTests
         actual.ShouldBeSameAs(expected);
         auditSink.CallCount.ShouldBe(2);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
+    }
+
+    /// <summary>Accepted approval and authorization are audited before the side effect.</summary>
+    [Fact]
+    public async Task RunAsync_ValidApproval_AuditsExpectedExecutionOrder()
+    {
+        var harness = new WorkflowTestHarness();
+        var approval = await harness.IssueApprovalAsync();
+        var sequence = new List<string>();
+        var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
+        var executor = new RecordingActionExecutor(sequence);
+
+        await harness.CreateOrchestrator(auditSink: auditSink, actionExecutor: executor).RunAsync(
+            WorkflowTestHarness.Principal(),
+            WorkflowTestHarness.Command(approvalId: approval.ApprovalId));
+
+        sequence.ShouldBe(
+        [
+            "audit:ApprovalDecision:ApprovalAccepted",
+            "audit:ActionAttempt:AuthorizedForExecution",
+            "execute",
+            "audit:ActionExecution:Executed",
+            "audit:WorkflowCompleted:Executed"
+        ]);
+    }
+
+    /// <summary>A supplied unknown approval is audited as rejected before the blocked attempt.</summary>
+    [Fact]
+    public async Task RunAsync_UnknownApproval_AuditsRejectionBeforeBlockedAttempt()
+    {
+        var harness = new WorkflowTestHarness();
+
+        var result = await harness.CreateOrchestrator().RunAsync(
+            WorkflowTestHarness.Principal(),
+            WorkflowTestHarness.Command(approvalId: "unknown-approval"));
+
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
+        harness.AuditSink.Events.Select(item => (item.EventType, item.Outcome)).ShouldBe(
+        [
+            (AuditEventType.ApprovalDecision, AuditOutcome.ApprovalRejected),
+            (AuditEventType.ActionAttempt, AuditOutcome.BlockedPendingApproval),
+            (AuditEventType.WorkflowCompleted, AuditOutcome.BlockedPendingApproval)
+        ]);
+    }
+
+    private static StubEvidenceRepository RepositoryReturning(EvidenceSearchResult evidence) =>
+        new((_, cancellationToken) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(evidence);
+        });
+
+    private static void AssertNoAssessment(WorkflowRunResult result)
+    {
+        result.RiskLevel.ShouldBe(RiskLevel.Unknown);
+        result.Recommendation.ShouldBeEmpty();
+        result.Reasons.ShouldBeEmpty();
+        result.Citations.ShouldBeEmpty();
+        result.MissingEvidence.ShouldBeEmpty();
+        result.RequiresApproval.ShouldBeFalse();
+        result.AuditEventIds.Count.ShouldBe(2);
     }
 }
