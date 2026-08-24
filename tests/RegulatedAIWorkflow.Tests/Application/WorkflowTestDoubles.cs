@@ -29,26 +29,20 @@ internal sealed class WorkflowTestHarness
 
     internal InMemoryActionExecutor ActionExecutor { get; } = new();
 
-    internal WorkflowActionCatalog ActionCatalog { get; } =
-        WorkflowActionCatalog.CreateDefault();
-
     internal WorkflowOrchestrator CreateOrchestrator(
         IEvidenceRepository? evidenceRepository = null,
         IRiskEvaluator? riskEvaluator = null,
         IAuditSink? auditSink = null,
         IApprovalRepository? approvalRepository = null,
         IActionExecutor? actionExecutor = null,
-        WorkflowActionCatalog? actionCatalog = null,
         TimeProvider? timeProvider = null)
     {
         var approvals = approvalRepository ?? ApprovalRepository;
         var clock = timeProvider ?? TimeProvider;
-        var actions = actionCatalog ?? ActionCatalog;
         return new(
             evidenceRepository ?? new InMemoryEvidenceRepository(),
-            riskEvaluator ?? new DeterministicRiskEvaluator(actions),
-            actions,
-            new ApprovalGate(approvals, clock, actions),
+            riskEvaluator ?? new DeterministicRiskEvaluator(),
+            new ApprovalGate(approvals, clock),
             auditSink ?? AuditSink,
             actionExecutor ?? ActionExecutor,
             clock);
@@ -59,33 +53,13 @@ internal sealed class WorkflowTestHarness
         IRiskEvaluator? riskEvaluator = null,
         IApprovalRepository? approvalRepository = null,
         IAuditSink? auditSink = null,
-        WorkflowActionCatalog? actionCatalog = null,
         TimeProvider? timeProvider = null) =>
-        CreateApprovalIssuerCore(
-            evidenceRepository,
-            riskEvaluator,
-            approvalRepository,
-            auditSink,
-            actionCatalog,
-            timeProvider);
-
-    private ApprovalIssuer CreateApprovalIssuerCore(
-        IEvidenceRepository? evidenceRepository,
-        IRiskEvaluator? riskEvaluator,
-        IApprovalRepository? approvalRepository,
-        IAuditSink? auditSink,
-        WorkflowActionCatalog? actionCatalog,
-        TimeProvider? timeProvider)
-    {
-        var actions = actionCatalog ?? ActionCatalog;
-        return new(
+        new(
             evidenceRepository ?? new InMemoryEvidenceRepository(),
-            riskEvaluator ?? new DeterministicRiskEvaluator(actions),
-            actions,
+            riskEvaluator ?? new DeterministicRiskEvaluator(),
             approvalRepository ?? ApprovalRepository,
             auditSink ?? AuditSink,
             timeProvider ?? TimeProvider);
-    }
 
     internal Task<ApprovalIssueResult> IssueApprovalAsync(
         WorkflowPrincipal? approver = null,

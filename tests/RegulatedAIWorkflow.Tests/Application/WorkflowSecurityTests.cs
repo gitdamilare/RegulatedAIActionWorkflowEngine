@@ -1,5 +1,3 @@
-using RegulatedAIWorkflow.Core.Application;
-using RegulatedAIWorkflow.Core.Contracts.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
@@ -250,40 +248,6 @@ public sealed class WorkflowSecurityTests
         executed.Recommendation.ShouldBe(
             "Proceeded under recorded approval. The action remains classified as high risk.");
         harness.ActionExecutor.Executions.Count.ShouldBe(1);
-    }
-
-    /// <summary>
-    /// Verifies an action-policy version change supersedes an approval issued under the old catalog.
-    /// </summary>
-    [Fact]
-    public async Task RunAsync_ChangedActionPolicyVersion_RejectsExistingApproval()
-    {
-        var harness = new WorkflowTestHarness();
-        var originalCatalog = WorkflowActionCatalog.CreateDefault();
-        var approval = await harness.CreateApprovalIssuer(
-            actionCatalog: originalCatalog).IssueAsync(
-                WorkflowTestHarness.Principal(
-                    UserRole.RiskApprover,
-                    userId: "risk-approver"),
-                new IssueApprovalCommand(
-                    "silverline-payments",
-                    WorkflowAction.MarkVendorApproved,
-                    ValidForHours: 24));
-        var changedCatalog = new WorkflowActionCatalog(
-            "actions-2026.08.2",
-            originalCatalog.Definitions);
-
-        var result = await harness.CreateOrchestrator(
-            actionCatalog: changedCatalog).RunAsync(
-                WorkflowTestHarness.Principal(),
-                WorkflowTestHarness.Command(approvalId: approval.ApprovalId));
-
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
-        harness.ActionExecutor.Executions.ShouldBeEmpty();
-        harness.AuditSink.Events.ShouldContain(item =>
-            item.ReasonCodes.Contains(
-                WorkflowAuditCodes.ApprovalPolicySuperseded,
-                StringComparer.Ordinal));
     }
 
     /// <summary>

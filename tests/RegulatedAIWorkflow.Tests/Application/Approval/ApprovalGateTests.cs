@@ -1,4 +1,3 @@
-using RegulatedAIWorkflow.Core.Application;
 using RegulatedAIWorkflow.Core.Application.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Approval;
@@ -21,8 +20,7 @@ public sealed class ApprovalGateTests
     {
         var gate = new ApprovalGate(
             new InMemoryApprovalRepository(),
-            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow),
-            WorkflowActionCatalog.CreateDefault());
+            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow));
 
         var result = await gate.EvaluateAsync(
             Request(approvalId),
@@ -46,8 +44,7 @@ public sealed class ApprovalGateTests
                 TenantId = storedTenant,
                 ApprovalId = storedApprovalId
             }),
-            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow),
-            WorkflowActionCatalog.CreateDefault());
+            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow));
 
         var result = await gate.EvaluateAsync(Request("approval"), CancellationToken.None);
 
@@ -76,10 +73,7 @@ public sealed class ApprovalGateTests
         {
             var repository = new InMemoryApprovalRepository();
             await repository.SaveAsync(scenario.Record, CancellationToken.None);
-            var gate = new ApprovalGate(
-                repository,
-                new FixedTimeProvider(now),
-                WorkflowActionCatalog.CreateDefault());
+            var gate = new ApprovalGate(repository, new FixedTimeProvider(now));
 
             var result = await gate.EvaluateAsync(Request("approval"), CancellationToken.None);
 
@@ -95,8 +89,7 @@ public sealed class ApprovalGateTests
         await repository.SaveAsync(Record(), CancellationToken.None);
         var gate = new ApprovalGate(
             repository,
-            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow),
-            WorkflowActionCatalog.CreateDefault());
+            new FixedTimeProvider(WorkflowTestHarness.ExpectedUtcNow));
 
         var result = await gate.EvaluateAsync(Request("approval"), CancellationToken.None);
 
