@@ -127,23 +127,42 @@ public sealed class WorkflowSecurityTests
     }
 
     /// <summary>
-    /// Verifies empty evidence is assessed fail-high but blocked as unavailable.
+    /// Verifies an unknown tenant-scoped subject is denied without assessment or enumeration.
     /// </summary>
     [Fact]
-    public async Task RunAsync_EmptyEvidence_ReturnsAmbiguousEvidenceBlock()
+    public async Task RunAsync_EmptyEvidence_ReturnsUnknownSubjectDenial()
     {
         var harness = new WorkflowTestHarness();
         var repository = RepositoryReturning(new EvidenceSearchResult([], []));
+        var evaluator = new StubRiskEvaluator(_ => WorkflowTestHarness.HighEvaluation());
 
-        var result = await harness.CreateOrchestrator(evidenceRepository: repository).RunAsync(
+        var result = await harness.CreateOrchestrator(repository, evaluator).RunAsync(
             WorkflowTestHarness.Principal(),
             WorkflowTestHarness.Command());
 
-        result.ActionStatus.ShouldBe(ActionStatus.BlockedEvidenceUnavailable);
-        result.RiskLevel.ShouldBe(RiskLevel.High);
-        result.RequiresApproval.ShouldBeTrue();
-        result.Reasons.ShouldHaveSingleItem().Code.ShouldBe("EVIDENCE_AMBIGUOUS");
+        repository.CallCount.ShouldBe(1);
+        evaluator.CallCount.ShouldBe(0);
+        harness.ActionExecutor.Executions.ShouldBeEmpty();
+        result.ActionStatus.ShouldBe(ActionStatus.DeniedUnknownSubject);
+        result.RiskLevel.ShouldBe(RiskLevel.Unknown);
+        result.Recommendation.ShouldBe("No such subject in this tenant.");
+        result.Reasons.ShouldBe(
+            [new RiskReason(WorkflowAuditCodes.UnknownSubject, "No such subject in this tenant.")]);
         result.Citations.ShouldBeEmpty();
+        result.MissingEvidence.ShouldBeEmpty();
+        result.RequiresApproval.ShouldBeFalse();
+        result.AuditEventIds.Count.ShouldBe(2);
+        harness.AuditSink.Events.Select(item => item.EventType).ShouldBe(
+            [AuditEventType.ActionAttempt, AuditEventType.WorkflowCompleted]);
+        harness.AuditSink.Events.ShouldAllBe(item =>
+            item.Outcome == AuditOutcome.DeniedUnknownSubject);
+        harness.AuditSink.Events.ShouldAllBe(item => item.RiskLevel == null);
+        harness.AuditSink.Events.ShouldAllBe(item => item.PolicyVersion == null);
+        harness.AuditSink.Events.ShouldAllBe(item => item.ReferencedDocumentIds.Count == 0);
+        harness.AuditSink.Events.ShouldAllBe(item =>
+            item.ReasonCodes.Count == 1 &&
+            item.ReasonCodes[0] == WorkflowAuditCodes.UnknownSubject);
+        harness.AuditSink.Events.ShouldAllBe(item => item.MissingEvidenceCodes.Count == 0);
     }
 
     /// <summary>
@@ -212,6 +231,7 @@ public sealed class WorkflowSecurityTests
         result.ActionStatus.ShouldBe(ActionStatus.Executed);
         result.RiskLevel.ShouldBe(RiskLevel.Medium);
         result.RequiresApproval.ShouldBeFalse();
+        result.Recommendation.ShouldBe("Proceed only with standard controls.");
         harness.ActionExecutor.Executions.Count.ShouldBe(1);
     }
 
