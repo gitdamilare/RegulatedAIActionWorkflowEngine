@@ -1,4 +1,6 @@
 using System.Net;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using RegulatedAIWorkflow.Api.Dtos;
 using static RegulatedAIWorkflow.Tests.Api.ApiTestRequest;
@@ -8,7 +10,7 @@ namespace RegulatedAIWorkflow.Tests.Api;
 /// <summary>Exercises workflow behavior through the real HTTP host.</summary>
 public sealed class WorkflowEndpointTests
 {
-    public static TheoryData<string, string> InvalidBodies => new()
+    public static TheoryData<string, string> BindingFailureBodies => new()
     {
         { "Malformed JSON", "{" },
         {
@@ -38,22 +40,13 @@ public sealed class WorkflowEndpointTests
               "userId": "forged-user"
             }
             """
-        },
-        {
-            "Invalid vendor identifier",
-            """
-            {
-              "vendorId": " vendor ",
-              "requestedAction": "markVendorApproved"
-            }
-            """
         }
     };
 
-    /// <summary>Malformed JSON and invalid structured input return a bad request.</summary>
+    /// <summary>Automatic JSON binding failures return safe Problem Details.</summary>
     [Theory]
-    [MemberData(nameof(InvalidBodies))]
-    public async Task PostAsync_InvalidBody_ReturnsBadRequest(string scenario, string body)
+    [MemberData(nameof(BindingFailureBodies))]
+    public async Task PostAsync_JsonBindingFailure_ReturnsProblemDetails(string scenario, string body)
     {
         await using var factory = new WebApplicationFactory<Program>();
         using var client = factory.CreateClient();
@@ -62,6 +55,31 @@ public sealed class WorkflowEndpointTests
         using var response = await client.SendAsync(request);
 
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest, scenario);
+        response.Content.Headers.ContentType?.MediaType.ShouldBe("application/problem+json", scenario);
+        var problem = await ReadAsync<ProblemDetails>(response);
+        problem.Status.ShouldBe(StatusCodes.Status400BadRequest, scenario);
+    }
+
+    /// <summary>Valid JSON with an invalid identifier retains Core's structured response.</summary>
+    [Fact]
+    public async Task PostAsync_InvalidVendorIdentifier_ReturnsCoreValidationResult()
+    {
+        await using var factory = new WebApplicationFactory<Program>();
+        using var client = factory.CreateClient();
+        const string body = """
+            {
+              "vendorId": " vendor ",
+              "requestedAction": "markVendorApproved"
+            }
+            """;
+
+        using var request = Create("/workflows/run", body);
+        using var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType?.MediaType.ShouldBe("application/json");
+        var result = await ReadAsync<WorkflowResponse>(response);
+        result.ActionStatus.ShouldBe("blocked_invalid_request");
     }
 
     /// <summary>An unauthorized caller receives no evidence-derived assessment data.</summary>

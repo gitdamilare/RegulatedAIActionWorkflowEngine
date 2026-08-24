@@ -37,6 +37,7 @@ builder.Services.AddScoped<WorkflowOrchestrator>();
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }))
     .WithName("Health");
