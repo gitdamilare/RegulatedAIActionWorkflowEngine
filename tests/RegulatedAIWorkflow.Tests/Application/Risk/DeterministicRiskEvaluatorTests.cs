@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RegulatedAIWorkflow.Core.Application;
+using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Infrastructure.Evidence;
@@ -11,6 +12,8 @@ namespace RegulatedAIWorkflow.Tests.Application.Risk;
 /// </summary>
 public sealed class DeterministicRiskEvaluatorTests
 {
+    private const string ActionRiskCode = "ACTION_MARK_VENDOR_APPROVED_HIGH_RISK";
+    private const string ExpectedPolicyVersion = "risk-2026.08.1+actions-2026.08.1";
     private readonly DeterministicRiskEvaluator evaluator = new();
 
     /// <summary>
@@ -28,6 +31,7 @@ public sealed class DeterministicRiskEvaluatorTests
         var scoped = EvidenceSecurity.EnforceScope(retrieved, tenantId, vendorId);
 
         var result = evaluator.EvaluateRisk(new RiskEvaluationInput(
+            WorkflowAction.MarkVendorApproved,
             scoped.Evidence.Facts,
             HasScopedEvidence: scoped.Evidence.Documents.Count > 0));
 
@@ -36,12 +40,17 @@ public sealed class DeterministicRiskEvaluatorTests
         result.RequiresApproval.ShouldBeTrue();
         result.EvidenceIsAmbiguous.ShouldBeFalse();
         result.Reasons.Select(reason => reason.Code).ShouldBe(
-            ["SOC2_MISSING", "RETENTION_SCHEDULE_MISSING", "BREACH_NOTIFICATION_MISSING"]);
+            [
+                ActionRiskCode,
+                "SOC2_MISSING",
+                "RETENTION_SCHEDULE_MISSING",
+                "BREACH_NOTIFICATION_MISSING"
+            ]);
         result.MissingEvidence.Select(item => item.Code).ShouldBe(
             ["SOC2_REPORT", "DATA_RETENTION_SCHEDULE", "BREACH_NOTIFICATION_CLAUSE"]);
         result.CitationReferences.Select(reference => reference.DocumentId).ShouldBe(
             ["northstar-policy-002", "northstar-silverline-contract"]);
-        result.PolicyVersion.ShouldBe("risk-2026.08.1");
+        result.PolicyVersion.ShouldBe(ExpectedPolicyVersion);
     }
 
     /// <summary>Verifies the SOC 2 rule fires independently and cites the policy requirement.</summary>
@@ -56,7 +65,7 @@ public sealed class DeterministicRiskEvaluatorTests
 
         var result = evaluator.EvaluateRisk(input);
 
-        result.Reasons.Select(reason => reason.Code).ShouldBe(["SOC2_MISSING"]);
+        result.Reasons.Select(reason => reason.Code).ShouldBe([ActionRiskCode, "SOC2_MISSING"]);
         result.MissingEvidence.Select(item => item.Code).ShouldBe(["SOC2_REPORT"]);
         result.CitationReferences.Select(reference => reference.DocumentId).ShouldBe(["policy-source"]);
     }
@@ -73,7 +82,8 @@ public sealed class DeterministicRiskEvaluatorTests
 
         var result = evaluator.EvaluateRisk(input);
 
-        result.Reasons.Select(reason => reason.Code).ShouldBe(["RETENTION_SCHEDULE_MISSING"]);
+        result.Reasons.Select(reason => reason.Code).ShouldBe(
+            [ActionRiskCode, "RETENTION_SCHEDULE_MISSING"]);
         result.MissingEvidence.Select(item => item.Code).ShouldBe(["DATA_RETENTION_SCHEDULE"]);
         result.CitationReferences.Select(reference => reference.DocumentId).ShouldBe(["policy-source"]);
     }
@@ -87,7 +97,8 @@ public sealed class DeterministicRiskEvaluatorTests
 
         var result = evaluator.EvaluateRisk(input);
 
-        result.Reasons.Select(reason => reason.Code).ShouldBe(["BREACH_NOTIFICATION_MISSING"]);
+        result.Reasons.Select(reason => reason.Code).ShouldBe(
+            [ActionRiskCode, "BREACH_NOTIFICATION_MISSING"]);
         result.MissingEvidence.Select(item => item.Code).ShouldBe(["BREACH_NOTIFICATION_CLAUSE"]);
         result.CitationReferences.Select(reference => reference.DocumentId).ShouldBe(["contract-source"]);
     }
@@ -98,7 +109,8 @@ public sealed class DeterministicRiskEvaluatorTests
     {
         var result = evaluator.EvaluateRisk(PaymentInputWithSoc2AndRetention());
 
-        result.Reasons.Select(reason => reason.Code).ShouldBe(["BREACH_NOTIFICATION_MISSING"]);
+        result.Reasons.Select(reason => reason.Code).ShouldBe(
+            [ActionRiskCode, "BREACH_NOTIFICATION_MISSING"]);
         result.CitationReferences.ShouldBeEmpty();
     }
 
@@ -106,10 +118,13 @@ public sealed class DeterministicRiskEvaluatorTests
     [Fact]
     public void EvaluateRisk_NoScopedEvidence_ReturnsAmbiguousHighRiskDecision()
     {
-        var result = evaluator.EvaluateRisk(new RiskEvaluationInput([], HasScopedEvidence: false));
+        var result = evaluator.EvaluateRisk(new RiskEvaluationInput(
+            WorkflowAction.MarkVendorApproved,
+            [],
+            HasScopedEvidence: false));
 
         AssertAmbiguousEvidenceResult(result);
-        result.Reasons.ShouldHaveSingleItem().Message.ShouldBe(
+        result.Reasons[1].Message.ShouldBe(
             "No trustworthy tenant-scoped evidence was available for the decision.");
         result.CitationReferences.ShouldBeEmpty();
     }
@@ -122,24 +137,24 @@ public sealed class DeterministicRiskEvaluatorTests
             Fact(EvidenceFactType.ProcessesPaymentData, "payment-source")));
 
         AssertAmbiguousEvidenceResult(result);
-        result.Reasons.ShouldHaveSingleItem().Message.ShouldBe(
+        result.Reasons[1].Message.ShouldBe(
             "The applicable payment-data security requirement is unknown.");
         result.CitationReferences.ShouldBeEmpty();
     }
 
-    /// <summary>Verifies complete payment controls produce the stable medium-risk floor.</summary>
+    /// <summary>Verifies complete payment controls cannot reduce the action's high-risk floor.</summary>
     [Fact]
-    public void EvaluateRisk_CompletePaymentEvidence_ReturnsMediumWithoutGaps()
+    public void EvaluateRisk_CompletePaymentEvidence_ReturnsActionDrivenHighWithoutGaps()
     {
         var result = evaluator.EvaluateRisk(PaymentInputWithSoc2AndRetention(
             Fact(EvidenceFactType.BreachNotificationPresent, "contract-source")));
 
-        result.RiskLevel.ShouldBe(RiskLevel.Medium);
-        result.Recommendation.ShouldBe("Proceed only with standard controls.");
-        result.Reasons.ShouldBeEmpty();
+        result.RiskLevel.ShouldBe(RiskLevel.High);
+        result.Recommendation.ShouldBe("Do not approve yet.");
+        result.Reasons.Select(reason => reason.Code).ShouldBe([ActionRiskCode]);
         result.MissingEvidence.ShouldBeEmpty();
         result.CitationReferences.ShouldBeEmpty();
-        result.RequiresApproval.ShouldBeFalse();
+        result.RequiresApproval.ShouldBeTrue();
         result.EvidenceIsAmbiguous.ShouldBeFalse();
     }
 
@@ -151,7 +166,8 @@ public sealed class DeterministicRiskEvaluatorTests
         EvidenceFactType factType,
         RiskLevel expectedRiskLevel)
     {
-        var result = evaluator.EvaluateRisk(Input(Fact(factType, "source-document")));
+        var result = LowBaselineEvaluator().EvaluateRisk(
+            Input(Fact(factType, "source-document")));
 
         result.RiskLevel.ShouldBe(expectedRiskLevel);
         result.Reasons.ShouldBeEmpty();
@@ -193,8 +209,21 @@ public sealed class DeterministicRiskEvaluatorTests
         var first = evaluator.EvaluateRisk(input);
         var second = evaluator.EvaluateRisk(input);
 
-        first.PolicyVersion.ShouldBe("risk-2026.08.1");
+        first.PolicyVersion.ShouldBe(ExpectedPolicyVersion);
         JsonSerializer.Serialize(second).ShouldBe(JsonSerializer.Serialize(first));
+    }
+
+    /// <summary>Verifies changing action policy changes the approval-bound policy version.</summary>
+    [Fact]
+    public void EvaluateRisk_DifferentActionCatalogVersion_ChangesEffectivePolicyVersion()
+    {
+        var input = Input(Fact(EvidenceFactType.SecurityEvidenceRequired, "source-document"));
+        var first = LowBaselineEvaluator("actions-test-1").EvaluateRisk(input);
+        var second = LowBaselineEvaluator("actions-test-2").EvaluateRisk(input);
+
+        first.PolicyVersion.ShouldBe("risk-2026.08.1+actions-test-1");
+        second.PolicyVersion.ShouldBe("risk-2026.08.1+actions-test-2");
+        second.PolicyVersion.ShouldNotBe(first.PolicyVersion);
     }
 
     /// <summary>Verifies a missing input is rejected rather than silently assessed.</summary>
@@ -215,7 +244,21 @@ public sealed class DeterministicRiskEvaluatorTests
             ]);
 
     private static RiskEvaluationInput Input(params EvidenceFact[] facts) =>
-        new(facts, HasScopedEvidence: true);
+        new(WorkflowAction.MarkVendorApproved, facts, HasScopedEvidence: true);
+
+    private static DeterministicRiskEvaluator LowBaselineEvaluator(
+        string version = "actions-test-low") =>
+        new(
+            new WorkflowActionCatalog(
+                version,
+                [
+                    new WorkflowActionDefinition(
+                        WorkflowAction.MarkVendorApproved,
+                        RiskLevel.Low,
+                        new RiskReason("ACTION_TEST_LOW", "Test action has a low baseline."),
+                        [UserRole.ProcurementManager],
+                        [UserRole.RiskApprover])
+                ]));
 
     private static EvidenceFact Fact(EvidenceFactType factType, string sourceDocumentId) =>
         new("northstar-bank", "silverline-payments", sourceDocumentId, factType);
@@ -226,8 +269,9 @@ public sealed class DeterministicRiskEvaluatorTests
         result.Recommendation.ShouldBe("Do not approve yet.");
         result.RequiresApproval.ShouldBeTrue();
         result.EvidenceIsAmbiguous.ShouldBeTrue();
-        result.Reasons.ShouldHaveSingleItem().Code.ShouldBe("EVIDENCE_AMBIGUOUS");
+        result.Reasons.Select(reason => reason.Code).ShouldBe(
+            [ActionRiskCode, "EVIDENCE_AMBIGUOUS"]);
         result.MissingEvidence.ShouldHaveSingleItem().Code.ShouldBe("TRUSTWORTHY_EVIDENCE");
-        result.PolicyVersion.ShouldBe("risk-2026.08.1");
+        result.PolicyVersion.ShouldBe(ExpectedPolicyVersion);
     }
 }

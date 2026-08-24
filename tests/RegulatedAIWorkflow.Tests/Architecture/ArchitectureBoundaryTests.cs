@@ -30,10 +30,10 @@ public sealed class ArchitectureBoundaryTests
     }
 
     /// <summary>
-    /// Verifies that risk evaluation can receive normalized facts but not evidence prose.
+    /// Verifies that risk evaluation can receive the structured action and normalized facts but not evidence prose.
     /// </summary>
     [Fact]
-    public void EvaluateRisk_RiskInputContract_AcceptsOnlyScopedTypedFacts()
+    public void EvaluateRisk_RiskInputContract_AcceptsOnlyActionAndScopedTypedFacts()
     {
         var evaluate = typeof(IRiskEvaluator).GetMethods().ShouldHaveSingleItem();
         var parameter = evaluate.GetParameters().ShouldHaveSingleItem();
@@ -56,7 +56,9 @@ public sealed class ArchitectureBoundaryTests
             .GetProperties()
             .ToDictionary(property => property.Name, StringComparer.Ordinal);
 
-        inputProperties.Count.ShouldBe(2);
+        inputProperties.Count.ShouldBe(3);
+        inputProperties[nameof(RiskEvaluationInput.RequestedAction)].PropertyType
+            .ShouldBe(typeof(WorkflowAction));
         inputProperties[nameof(RiskEvaluationInput.Facts)].PropertyType
             .ShouldBe(typeof(IReadOnlyList<EvidenceFact>));
         inputProperties[nameof(RiskEvaluationInput.HasScopedEvidence)].PropertyType

@@ -8,10 +8,10 @@ namespace RegulatedAIWorkflow.Core.Application;
 internal static class ActionAuthorizationPolicy
 {
     internal static bool MayAttempt(UserRole role, WorkflowAction action) =>
-        (role is UserRole.ProcurementManager or UserRole.ComplianceOfficer) &&
-        action is WorkflowAction.MarkVendorApproved;
+        WorkflowActionPolicies.TryGet(action, out var policy) &&
+        policy.AllowedRequesterRoles.Contains(role);
 
     internal static bool MayApprove(UserRole role, WorkflowAction action) =>
-        role is UserRole.RiskApprover &&
-        action is WorkflowAction.MarkVendorApproved;
+        WorkflowActionPolicies.TryGet(action, out var policy) &&
+        policy.AllowedApproverRoles.Contains(role);
 }

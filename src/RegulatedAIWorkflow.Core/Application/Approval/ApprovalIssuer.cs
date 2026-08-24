@@ -81,6 +81,7 @@ public sealed class ApprovalIssuer(
         }
 
         var evaluation = riskEvaluator.EvaluateRisk(new RiskEvaluationInput(
+            validated.RequestedAction,
             scoped.Evidence.Facts,
             HasScopedEvidence: true));
         if (!Enum.IsDefined(evaluation.RiskLevel) ||

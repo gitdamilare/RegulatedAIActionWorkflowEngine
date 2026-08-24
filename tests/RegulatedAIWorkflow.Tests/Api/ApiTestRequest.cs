@@ -1,10 +1,15 @@
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using RegulatedAIWorkflow.Core.Contracts.Workflow;
 
 namespace RegulatedAIWorkflow.Tests.Api;
 
 internal static class ApiTestRequest
 {
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
     internal const string WorkflowBody = """
         {
           "vendorId": "silverline-payments",
@@ -42,9 +47,19 @@ internal static class ApiTestRequest
     internal static async Task<T> ReadAsync<T>(HttpResponseMessage response)
         where T : class
     {
-        var result = await response.Content.ReadFromJsonAsync<T>();
+        var result = await response.Content.ReadFromJsonAsync<T>(JsonOptions);
         result.ShouldNotBeNull();
         return result;
+    }
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(
+            new JsonStringEnumConverter<WorkflowAction>(
+                JsonNamingPolicy.CamelCase,
+                allowIntegerValues: false));
+        return options;
     }
 
     private static void AddHeader(HttpRequestMessage request, string name, string? value)

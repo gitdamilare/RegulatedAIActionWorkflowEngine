@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using RegulatedAIWorkflow.Api.Dtos;
+using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using static RegulatedAIWorkflow.Tests.Api.ApiTestRequest;
 
 namespace RegulatedAIWorkflow.Tests.Api;
@@ -128,6 +129,7 @@ public sealed class WorkflowEndpointTests
             approvalResponse.StatusCode.ShouldBe(HttpStatusCode.Created);
             approval = await ReadAsync<ApprovalResponse>(approvalResponse);
             approval.ApproverUserId.ShouldBe("risk-approver");
+            approval.RequestedAction.ShouldBe(WorkflowAction.MarkVendorApproved);
         }
 
         var approvedBody = $$"""
