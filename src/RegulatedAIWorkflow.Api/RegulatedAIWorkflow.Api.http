@@ -1,5 +1,128 @@
 @baseUrl = http://localhost:5000
+@tenantId = northstar-bank
+@otherTenantId = harborview-bank
+@requesterUserId = procurement-user
+@approverUserId = risk-approver
+@vendorId = silverline-payments
+@tenantAOnlyVendorId = lakeshore-analytics
+@requestedAction = markVendorApproved
 
-### Health
+### Static liveness
 GET {{baseUrl}}/health
 Accept: application/json
+
+### 1. Assess a high-risk action without approval; no pending approval resource is created
+# Expect: 200 OK, riskLevel high, requiresApproval true, actionStatus blocked_pending_approval.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{requesterUserId}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{vendorId}}",
+  "question": "May this vendor process payment data?",
+  "requestedAction": "{{requestedAction}}"
+}
+
+### 2. After reviewing the assessment, record a scope-bound approval
+# This binds the current tenant, vendor, action, evidence, and policy.
+# Expect: 201 Created. The server computes the evidence hash and policy binding.
+# @name issueApproval
+POST {{baseUrl}}/approvals
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{approverUserId}}
+X-User-Role: RiskApprover
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}",
+  "validForHours": 24
+}
+
+### 3. Present the approval on a matching request; Core revalidates every binding
+# Expect: 200 OK, actionStatus executed, while riskLevel remains high.
+# Expect recommendation: "Proceeded under recorded approval. The assessment remains high and the evidence gaps listed below are still outstanding."
+# Approval changes the execution guidance; it does not rewrite the risk assessment or remove its gaps.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{requesterUserId}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}",
+  "approvalId": "{{issueApproval.response.body.$.approvalId}}"
+}
+
+###############################################################################
+# Cross-tenant isolation
+###############################################################################
+
+### 4. Tenant B cannot retrieve evidence for a vendor that exists only in Tenant A
+# lakeshore-analytics belongs to northstar-bank, but this request is made as
+# harborview-bank. Expect: 200 OK, riskLevel unknown, requiresApproval false,
+# actionStatus denied_unknown_subject, recommendation "No such subject in this
+# tenant.", UNKNOWN_SUBJECT as the only reason, and no citations or missing evidence.
+# The response must not contain northstar-lakeshore-contract or any Northstar
+# evidence text. It should be indistinguishable from an unknown Harborview vendor.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{otherTenantId}}
+X-User-Id: {{requesterUserId}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{tenantAOnlyVendorId}}",
+  "question": "Can we approve this vendor?",
+  "requestedAction": "{{requestedAction}}"
+}
+
+###############################################################################
+# Focused refusal examples
+###############################################################################
+
+### 5. A Viewer cannot attempt the regulated action
+# Expect: 403 Forbidden, blocked_unauthorized, unknown risk, and no evidence-derived data.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: viewer-user
+X-User-Role: Viewer
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}"
+}
+
+### 6. A ProcurementManager cannot record approval
+# Expect: 403 Forbidden with Problem Details.
+POST {{baseUrl}}/approvals
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{requesterUserId}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}"
+}
+
+### 7. Protected endpoints require asserted identity headers
+# Expect: 401 Unauthorized with Problem Details.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}"
+}
