@@ -7,10 +7,10 @@ namespace RegulatedAIWorkflow.Core.Application.Risk;
 /// </summary>
 internal static class RiskPolicies
 {
-    /// <summary>The first deterministic policy in its required stable order.</summary>
-    internal static RiskPolicyDefinition Version1 { get; } =
+    /// <summary>The current action-aware deterministic policy in its required stable order.</summary>
+    internal static RiskPolicyDefinition Version2 { get; } =
         new(
-            "risk-2026.08.1",
+            "risk-2026.08.2",
             [
                 new TrustworthyScopedEvidenceRule(),
                 new PaymentSecurityRequirementRule(),
@@ -20,5 +20,5 @@ internal static class RiskPolicies
             ]);
 
     /// <summary>The policy selected by the server for new evaluations.</summary>
-    internal static RiskPolicyDefinition Current => Version1;
+    internal static RiskPolicyDefinition Current => Version2;
 }

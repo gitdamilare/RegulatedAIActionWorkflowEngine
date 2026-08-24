@@ -128,6 +128,7 @@ public sealed class WorkflowEndpointTests
             approvalResponse.StatusCode.ShouldBe(HttpStatusCode.Created);
             approval = await ReadAsync<ApprovalResponse>(approvalResponse);
             approval.ApproverUserId.ShouldBe("risk-approver");
+            approval.RequestedAction.ShouldBe("markVendorApproved");
         }
 
         var approvedBody = $$"""

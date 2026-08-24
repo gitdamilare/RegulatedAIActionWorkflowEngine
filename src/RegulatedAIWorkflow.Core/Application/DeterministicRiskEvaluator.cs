@@ -34,6 +34,7 @@ public sealed class DeterministicRiskEvaluator : IRiskEvaluator
     {
         ArgumentNullException.ThrowIfNull(input);
 
+        var actionPolicy = WorkflowActionPolicies.GetRequired(input.RequestedAction);
         var context = new RiskRuleContext(input);
         var outcomes = new List<RiskRuleOutcome>();
 
@@ -48,36 +49,58 @@ public sealed class DeterministicRiskEvaluator : IRiskEvaluator
             outcomes.Add(outcome);
             if (outcome.IsTerminal)
             {
-                return CreateEvaluation(context, outcomes, outcome.RiskLevel);
+                return CreateEvaluation(
+                    context,
+                    actionPolicy,
+                    outcomes,
+                    EffectiveRiskLevel(context, actionPolicy, outcomes));
             }
         }
 
-        var riskLevel = outcomes.Aggregate(
-            BaselineRiskLevel(context),
-            (current, outcome) =>
-                (RiskLevel)Math.Max((int)current, (int)outcome.RiskLevel));
-
-        return CreateEvaluation(context, outcomes, riskLevel);
+        return CreateEvaluation(
+            context,
+            actionPolicy,
+            outcomes,
+            EffectiveRiskLevel(context, actionPolicy, outcomes));
     }
 
     private RiskEvaluation CreateEvaluation(
         RiskRuleContext context,
+        WorkflowActionPolicy actionPolicy,
         IReadOnlyList<RiskRuleOutcome> outcomes,
         RiskLevel riskLevel) =>
         new(
             riskLevel,
             RecommendationFor(riskLevel),
-            outcomes.Select(outcome => outcome.Reason).ToArray(),
+            ActionAndRuleReasons(actionPolicy, outcomes),
             RiskCitationReferenceBuilder.Build(context.Facts, outcomes),
             outcomes.Select(outcome => outcome.MissingEvidence).ToArray(),
             RequiresApproval: riskLevel is RiskLevel.High,
             EvidenceIsAmbiguous: outcomes.Any(outcome => outcome.EvidenceIsAmbiguous),
             policy.Version);
 
-    private static RiskLevel BaselineRiskLevel(RiskRuleContext context) =>
+    private static RiskReason[] ActionAndRuleReasons(
+        WorkflowActionPolicy actionPolicy,
+        IReadOnlyList<RiskRuleOutcome> outcomes) =>
+        actionPolicy.BaselineRiskLevel is RiskLevel.Low
+            ? outcomes.Select(outcome => outcome.Reason).ToArray()
+            : [actionPolicy.BaselineRiskReason, .. outcomes.Select(outcome => outcome.Reason)];
+
+    private static RiskLevel EffectiveRiskLevel(
+        RiskRuleContext context,
+        WorkflowActionPolicy actionPolicy,
+        IReadOnlyList<RiskRuleOutcome> outcomes) =>
+        outcomes.Aggregate(
+            Maximum(actionPolicy.BaselineRiskLevel, EvidenceRiskFloor(context)),
+            (current, outcome) => Maximum(current, outcome.RiskLevel));
+
+    private static RiskLevel EvidenceRiskFloor(RiskRuleContext context) =>
         context.ProcessesPaymentData || context.ContainsSensitiveData
             ? RiskLevel.Medium
             : RiskLevel.Low;
+
+    private static RiskLevel Maximum(RiskLevel left, RiskLevel right) =>
+        (RiskLevel)Math.Max((int)left, (int)right);
 
     private static string RecommendationFor(RiskLevel riskLevel) => riskLevel switch
     {

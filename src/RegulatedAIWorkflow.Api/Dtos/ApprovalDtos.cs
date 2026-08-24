@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RegulatedAIWorkflow.Core.Contracts.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 
@@ -32,11 +33,7 @@ public sealed record ApprovalResponse(
             result.ApprovalId ?? throw MissingBinding(nameof(result.ApprovalId)),
             result.ApproverUserId ?? throw MissingBinding(nameof(result.ApproverUserId)),
             result.VendorId ?? throw MissingBinding(nameof(result.VendorId)),
-            result.RequestedAction switch
-            {
-                WorkflowAction.MarkVendorApproved => "markVendorApproved",
-                _ => throw MissingBinding(nameof(result.RequestedAction))
-            },
+            ActionName(result.RequestedAction),
             result.EvidenceSetHash ?? throw MissingBinding(nameof(result.EvidenceSetHash)),
             result.IssuedAtUtc ?? throw MissingBinding(nameof(result.IssuedAtUtc)),
             result.ExpiresAtUtc ?? throw MissingBinding(nameof(result.ExpiresAtUtc)),
@@ -45,4 +42,9 @@ public sealed record ApprovalResponse(
 
     private static InvalidOperationException MissingBinding(string field) =>
         new($"An issued approval did not contain {field}.");
+
+    private static string ActionName(WorkflowAction action) =>
+        action is not WorkflowAction.Unknown && Enum.IsDefined(action)
+            ? JsonNamingPolicy.CamelCase.ConvertName(action.ToString())
+            : throw MissingBinding(nameof(ApprovalIssueResult.RequestedAction));
 }

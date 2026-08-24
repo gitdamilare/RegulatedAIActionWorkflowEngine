@@ -22,6 +22,8 @@ public sealed class WorkflowOrchestrator(
 {
     private const string ApprovedExecutionRecommendation =
         "Proceeded under recorded approval. The assessment remains high and the evidence gaps listed below are still outstanding.";
+    private const string ApprovedInherentActionRiskRecommendation =
+        "Proceeded under recorded approval. The action remains classified as high risk.";
     private const string UnknownSubjectRecommendation =
         "No such subject in this tenant.";
 
@@ -107,6 +109,7 @@ public sealed class WorkflowOrchestrator(
 
             // Stage 5: Evaluate only retained, typed facts; evidence prose never reaches policy.
             var evaluation = riskEvaluator.EvaluateRisk(new RiskEvaluationInput(
+                validated.RequestedAction,
                 scoped.Evidence.Facts,
                 HasScopedEvidence: true));
 
@@ -289,7 +292,9 @@ public sealed class WorkflowOrchestrator(
         RiskEvaluation evaluation,
         ActionStatus actionStatus) =>
         actionStatus is ActionStatus.Executed && evaluation.RequiresApproval
-            ? ApprovedExecutionRecommendation
+            ? evaluation.MissingEvidence.Count > 0
+                ? ApprovedExecutionRecommendation
+                : ApprovedInherentActionRiskRecommendation
             : evaluation.Recommendation;
 
     private async Task<WorkflowRunResult> CompleteAsync(
