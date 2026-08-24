@@ -7,7 +7,7 @@ namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
 /// </summary>
 /// <param name="WorkflowId">The unique identifier for this workflow run.</param>
 /// <param name="RiskLevel">The deterministic risk assessment.</param>
-/// <param name="Recommendation">The policy-authored recommended response.</param>
+/// <param name="Recommendation">The policy assessment contextualized by the resulting workflow outcome.</param>
 /// <param name="Reasons">The structured reasons supporting the assessment.</param>
 /// <param name="Citations">Verified citations safe to return to the caller.</param>
 /// <param name="MissingEvidence">Evidence gaps considered by the assessment.</param>

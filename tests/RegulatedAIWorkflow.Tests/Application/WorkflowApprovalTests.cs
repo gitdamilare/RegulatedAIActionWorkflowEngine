@@ -25,6 +25,7 @@ public sealed class WorkflowApprovalTests
             WorkflowTestHarness.Command());
 
         result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        result.Recommendation.ShouldBe("Do not approve yet.");
         harness.ActionExecutor.Executions.ShouldBeEmpty();
         harness.AuditSink.Events.Select(item => item.EventType).ShouldBe(
             [AuditEventType.ActionAttempt, AuditEventType.WorkflowCompleted]);
@@ -46,7 +47,8 @@ public sealed class WorkflowApprovalTests
         result.ActionStatus.ShouldBe(ActionStatus.Executed);
         result.RiskLevel.ShouldBe(RiskLevel.High);
         result.RequiresApproval.ShouldBeTrue();
-        result.Recommendation.ShouldBe("Do not approve yet.");
+        result.Recommendation.ShouldBe(
+            "Proceeded under recorded approval. The assessment remains high and the evidence gaps listed below are still outstanding.");
         result.Reasons.ShouldNotBeEmpty();
         result.Citations.ShouldNotBeEmpty();
         result.MissingEvidence.ShouldNotBeEmpty();

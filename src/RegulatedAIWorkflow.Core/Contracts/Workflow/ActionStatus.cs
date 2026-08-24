@@ -21,5 +21,8 @@ public enum ActionStatus
     BlockedExecutionUnavailable,
 
     /// <summary>The regulated action was executed after all applicable gates passed.</summary>
-    Executed
+    Executed,
+
+    /// <summary>No subject exists within the caller's tenant scope.</summary>
+    DeniedUnknownSubject
 }
