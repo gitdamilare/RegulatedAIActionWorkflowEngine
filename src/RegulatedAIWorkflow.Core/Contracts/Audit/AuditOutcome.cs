@@ -36,5 +36,8 @@ public enum AuditOutcome
     Executed,
 
     /// <summary>The workflow failed unexpectedly.</summary>
-    Failed
+    Failed,
+
+    /// <summary>No subject exists within the caller's tenant scope.</summary>
+    DeniedUnknownSubject
 }

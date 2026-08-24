@@ -17,8 +17,11 @@ public static class WorkflowAuditCodes
     /// <summary>One or more assessment citations could not be verified.</summary>
     public const string CitationVerificationFailed = "CITATION_VERIFICATION_FAILED";
 
-    /// <summary>Scoped evidence was empty or the assessment declared it ambiguous.</summary>
+    /// <summary>Evidence could not pass the trusted-evidence gate.</summary>
     public const string EvidenceGateFailed = "EVIDENCE_GATE_FAILED";
+
+    /// <summary>No subject exists within the caller's tenant scope.</summary>
+    public const string UnknownSubject = "UNKNOWN_SUBJECT";
 
     /// <summary>The principal's role cannot issue the requested approval.</summary>
     public const string ApproverRoleInsufficient = "APPROVER_ROLE_INSUFFICIENT";

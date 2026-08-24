@@ -20,6 +20,11 @@ public sealed class WorkflowOrchestrator(
     IActionExecutor actionExecutor,
     TimeProvider timeProvider)
 {
+    private const string ApprovedExecutionRecommendation =
+        "Proceeded under recorded approval. The assessment remains high and the evidence gaps listed below are still outstanding.";
+    private const string UnknownSubjectRecommendation =
+        "No such subject in this tenant.";
+
     /// <summary>
     /// Validates, authorizes, assesses, verifies, audits, and conditionally executes a workflow request.
     /// </summary>
@@ -91,12 +96,19 @@ public sealed class WorkflowOrchestrator(
                     AuditOutcome.BlockedEvidenceUnavailable);
             }
 
-            var hasScopedEvidence = scoped.Evidence.Documents.Count > 0;
+            if (scoped.Evidence.Documents.Count == 0)
+            {
+                auditContext.ReasonCodes = [WorkflowAuditCodes.UnknownSubject];
+                return await CompleteAsync(
+                    auditContext,
+                    CreateUnknownSubjectResult(workflowId),
+                    AuditOutcome.DeniedUnknownSubject);
+            }
 
             // Stage 5: Evaluate only retained, typed facts; evidence prose never reaches policy.
             var evaluation = riskEvaluator.EvaluateRisk(new RiskEvaluationInput(
                 scoped.Evidence.Facts,
-                hasScopedEvidence));
+                HasScopedEvidence: true));
 
             if (!Enum.IsDefined(evaluation.RiskLevel) || evaluation.RiskLevel is RiskLevel.Unknown)
             {
@@ -122,7 +134,7 @@ public sealed class WorkflowOrchestrator(
             auditContext.ReasonCodes = evaluation.Reasons.Select(reason => reason.Code).ToArray();
             auditContext.MissingEvidenceCodes = evaluation.MissingEvidence.Select(item => item.Code).ToArray();
 
-            if (!hasScopedEvidence || evaluation.EvidenceIsAmbiguous)
+            if (evaluation.EvidenceIsAmbiguous)
             {
                 auditContext.ReasonCodes = [.. auditContext.ReasonCodes, WorkflowAuditCodes.EvidenceGateFailed];
                 return await CompleteAsync(
@@ -245,6 +257,18 @@ public sealed class WorkflowOrchestrator(
             actionStatus,
             AuditEventIds: []);
 
+    private static WorkflowRunResult CreateUnknownSubjectResult(Guid workflowId) =>
+        new(
+            workflowId,
+            RiskLevel.Unknown,
+            UnknownSubjectRecommendation,
+            [new RiskReason(WorkflowAuditCodes.UnknownSubject, UnknownSubjectRecommendation)],
+            [],
+            [],
+            RequiresApproval: false,
+            ActionStatus.DeniedUnknownSubject,
+            AuditEventIds: []);
+
     private static WorkflowRunResult CreateAssessedResult(
         Guid workflowId,
         RiskEvaluation evaluation,
@@ -253,13 +277,20 @@ public sealed class WorkflowOrchestrator(
         new(
             workflowId,
             evaluation.RiskLevel,
-            evaluation.Recommendation,
+            RecommendationFor(evaluation, actionStatus),
             evaluation.Reasons,
             citations,
             evaluation.MissingEvidence,
             evaluation.RequiresApproval,
             actionStatus,
             AuditEventIds: []);
+
+    private static string RecommendationFor(
+        RiskEvaluation evaluation,
+        ActionStatus actionStatus) =>
+        actionStatus is ActionStatus.Executed && evaluation.RequiresApproval
+            ? ApprovedExecutionRecommendation
+            : evaluation.Recommendation;
 
     private async Task<WorkflowRunResult> CompleteAsync(
         WorkflowAuditContext auditContext,
