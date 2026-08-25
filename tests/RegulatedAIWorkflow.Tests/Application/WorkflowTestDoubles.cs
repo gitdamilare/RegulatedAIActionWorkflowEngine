@@ -208,6 +208,8 @@ internal sealed class RecordingActionExecutor(IList<string>? sequence = null) : 
 
     internal bool Succeeds { get; set; } = true;
 
+    internal Exception? ExceptionToThrow { get; set; }
+
     public Task<ActionExecutionResult> ExecuteAsync(
         ActionExecutionRequest request,
         CancellationToken cancellationToken)
@@ -215,6 +217,11 @@ internal sealed class RecordingActionExecutor(IList<string>? sequence = null) : 
         cancellationToken.ThrowIfCancellationRequested();
         Executions.Add(request);
         sequence?.Add("execute");
+        if (ExceptionToThrow is not null)
+        {
+            return Task.FromException<ActionExecutionResult>(ExceptionToThrow);
+        }
+
         return Task.FromResult(new ActionExecutionResult(Succeeds));
     }
 }

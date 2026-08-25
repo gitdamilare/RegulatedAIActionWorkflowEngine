@@ -20,6 +20,12 @@ public static class WorkflowAuditCodes
     /// <summary>Evidence could not pass the trusted-evidence gate.</summary>
     public const string EvidenceGateFailed = "EVIDENCE_GATE_FAILED";
 
+    /// <summary>The executor reported that no regulated effect occurred.</summary>
+    public const string ExecutionUnavailable = "EXECUTION_UNAVAILABLE";
+
+    /// <summary>The executor call ended without a definitive regulated-effect outcome.</summary>
+    public const string ExecutionOutcomeUnknown = "EXECUTION_OUTCOME_UNKNOWN";
+
     /// <summary>No subject exists within the caller's tenant scope.</summary>
     public const string UnknownSubject = "UNKNOWN_SUBJECT";
 

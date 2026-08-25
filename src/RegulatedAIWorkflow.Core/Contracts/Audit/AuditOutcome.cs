@@ -26,7 +26,7 @@ public enum AuditOutcome
     /// <summary>A valid high-risk decision requires independent approval.</summary>
     BlockedPendingApproval,
 
-    /// <summary>A valid lower-risk decision remains blocked because execution is unavailable.</summary>
+    /// <summary>The executor reported that no regulated effect occurred.</summary>
     BlockedExecutionUnavailable,
 
     /// <summary>Every applicable gate passed and execution may begin.</summary>
@@ -34,6 +34,9 @@ public enum AuditOutcome
 
     /// <summary>The regulated action executor reported success.</summary>
     Executed,
+
+    /// <summary>The executor call ended without a definitive regulated-effect outcome.</summary>
+    ExecutionOutcomeUnknown,
 
     /// <summary>The workflow failed unexpectedly.</summary>
     Failed,

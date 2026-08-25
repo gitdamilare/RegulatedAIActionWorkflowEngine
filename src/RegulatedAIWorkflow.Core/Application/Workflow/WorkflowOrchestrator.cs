@@ -45,6 +45,7 @@ public sealed class WorkflowOrchestrator(
             RequestedAction = ValidateWorkflowCommand(command),
             ApprovalId = WorkflowRequestValidator.SafeIdentifierOrNull(command?.ApprovalId)
         };
+        var executorCallOutstanding = false;
 
         try
         {
@@ -210,17 +211,36 @@ public sealed class WorkflowOrchestrator(
                 AuditOutcome.AuthorizedForExecution);
 
             // Stage 8: Execute only after every applicable gate and mandatory audit write passed.
-            var execution = await actionExecutor.ExecuteAsync(
-                new ActionExecutionRequest(
-                    workflowId,
-                    validated.TenantId,
-                    validated.VendorId,
-                    validated.UserId,
-                    validated.RequestedAction),
-                cancellationToken);
+            var executionRequest = new ActionExecutionRequest(
+                workflowId,
+                validated.TenantId,
+                validated.VendorId,
+                validated.UserId,
+                validated.RequestedAction);
+            executorCallOutstanding = true;
+            var execution = await actionExecutor.ExecuteAsync(executionRequest, cancellationToken);
+            executorCallOutstanding = false;
+
             if (!execution.Succeeded)
             {
-                throw new InvalidOperationException("The action executor reported failure.");
+                auditContext.ReasonCodes =
+                [
+                    .. auditContext.ReasonCodes,
+                    WorkflowAuditCodes.ExecutionUnavailable
+                ];
+                await WriteAuditAsync(
+                    auditContext,
+                    AuditEventType.ActionExecution,
+                    AuditOutcome.BlockedExecutionUnavailable);
+
+                return await CompleteDispatchedAsync(
+                    auditContext,
+                    CreateAssessedResult(
+                        workflowId,
+                        evaluation,
+                        citations,
+                        ActionStatus.BlockedExecutionUnavailable),
+                    AuditOutcome.BlockedExecutionUnavailable);
             }
 
             await WriteAuditAsync(
@@ -228,20 +248,37 @@ public sealed class WorkflowOrchestrator(
                 AuditEventType.ActionExecution,
                 AuditOutcome.Executed);
 
-            return await CompleteExecutedAsync(
+            return await CompleteDispatchedAsync(
                 auditContext,
                 CreateAssessedResult(
                     workflowId,
                     evaluation,
                     citations,
-                    ActionStatus.Executed));
+                    ActionStatus.Executed),
+                AuditOutcome.Executed);
         }
         catch
         {
+            var failureOutcome = executorCallOutstanding
+                ? AuditOutcome.ExecutionOutcomeUnknown
+                : AuditOutcome.Failed;
+            if (executorCallOutstanding)
+            {
+                auditContext.ReasonCodes =
+                [
+                    .. auditContext.ReasonCodes,
+                    WorkflowAuditCodes.ExecutionOutcomeUnknown
+                ];
+                await WriteAuditAsync(
+                    auditContext,
+                    AuditEventType.ActionExecution,
+                    failureOutcome);
+            }
+
             await WriteAuditAsync(
                 auditContext,
                 AuditEventType.WorkflowCompleted,
-                AuditOutcome.Failed);
+                failureOutcome);
             throw;
         }
     }
@@ -310,14 +347,15 @@ public sealed class WorkflowOrchestrator(
         return result with { AuditEventIds = auditContext.EventIds.ToArray() };
     }
 
-    private async Task<WorkflowRunResult> CompleteExecutedAsync(
+    private async Task<WorkflowRunResult> CompleteDispatchedAsync(
         WorkflowAuditContext auditContext,
-        WorkflowRunResult result)
+        WorkflowRunResult result,
+        AuditOutcome outcome)
     {
         await WriteAuditAsync(
             auditContext,
             AuditEventType.WorkflowCompleted,
-            AuditOutcome.Executed);
+            outcome);
         return result with { AuditEventIds = auditContext.EventIds.ToArray() };
     }
 

@@ -74,6 +74,77 @@ public sealed class Required_3_AuditTrailTests
         ]);
     }
 
+    /// <summary>A reported executor failure proves no effect and returns the existing unavailable result.</summary>
+    [Fact]
+    public async Task RunAsync_ExecutorReportsNoEffect_ReturnsUnavailableAndAuditsOutcome()
+    {
+        var harness = new WorkflowTestHarness();
+        var approval = await harness.IssueApprovalAsync();
+        var sequence = new List<string>();
+        var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
+        var executor = new RecordingActionExecutor(sequence) { Succeeds = false };
+
+        var result = await harness.CreateOrchestrator(
+            auditSink: auditSink,
+            actionExecutor: executor).RunAsync(
+                WorkflowTestHarness.Principal(),
+                WorkflowTestHarness.Command(approvalId: approval.ApprovalId));
+
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedExecutionUnavailable);
+        result.RiskLevel.ShouldBe(RiskLevel.High);
+        result.Citations.ShouldNotBeEmpty();
+        result.Reasons.ShouldNotBeEmpty();
+        sequence.ShouldBe(
+        [
+            "audit:ApprovalDecision:ApprovalAccepted",
+            "audit:ActionAttempt:AuthorizedForExecution",
+            "execute",
+            "audit:ActionExecution:BlockedExecutionUnavailable",
+            "audit:WorkflowCompleted:BlockedExecutionUnavailable"
+        ]);
+
+        var workflowEvents = harness.AuditSink.Events
+            .Where(item => item.WorkflowId == result.WorkflowId)
+            .ToArray();
+        workflowEvents.Count(item => item.EventType is AuditEventType.ActionAttempt).ShouldBe(1);
+        workflowEvents.ShouldNotContain(item => item.Outcome == AuditOutcome.Failed);
+        workflowEvents
+            .Where(item => item.EventType is AuditEventType.ActionExecution or AuditEventType.WorkflowCompleted)
+            .ShouldAllBe(item => item.ReasonCodes.Contains(WorkflowAuditCodes.ExecutionUnavailable));
+    }
+
+    /// <summary>An executor call that does not return a result is explicitly audited as unknown.</summary>
+    [Fact]
+    public async Task RunAsync_ExecutorThrows_AuditsUnknownOutcomeAndRethrowsOriginalException()
+    {
+        var expected = new InvalidOperationException("downstream response was lost");
+        var sequence = new List<string>();
+        var harness = new WorkflowTestHarness();
+        var auditSink = new SequencedAuditSink(harness.AuditSink, sequence);
+        var executor = new RecordingActionExecutor(sequence) { ExceptionToThrow = expected };
+
+        var actual = await Should.ThrowAsync<InvalidOperationException>(() =>
+            harness.CreateOrchestrator(
+                RepositoryReturning(WorkflowTestHarness.Evidence()),
+                new StubRiskEvaluator(_ => WorkflowTestHarness.MediumEvaluation()),
+                auditSink,
+                actionExecutor: executor).RunAsync(
+                    WorkflowTestHarness.Principal(),
+                    WorkflowTestHarness.Command()));
+
+        actual.ShouldBeSameAs(expected);
+        sequence.ShouldBe(
+        [
+            "audit:ActionAttempt:AuthorizedForExecution",
+            "execute",
+            "audit:ActionExecution:ExecutionOutcomeUnknown",
+            "audit:WorkflowCompleted:ExecutionOutcomeUnknown"
+        ]);
+        harness.AuditSink.Events
+            .Where(item => item.EventType is AuditEventType.ActionExecution or AuditEventType.WorkflowCompleted)
+            .ShouldAllBe(item => item.ReasonCodes.Contains(WorkflowAuditCodes.ExecutionOutcomeUnknown));
+    }
+
     /// <summary>Verifies caller-visible audit identifiers are the persisted identifiers in write order.</summary>
     [Fact]
     public async Task RunAsync_ReturnedAuditIdsAndTimestampsMatchPersistedEvents()
@@ -147,6 +218,8 @@ public sealed class Required_3_AuditTrailTests
         auditEvent.EventType.ShouldBe(AuditEventType.WorkflowCompleted);
         auditEvent.Outcome.ShouldBe(AuditOutcome.Failed);
         harness.ActionExecutor.Executions.ShouldBeEmpty();
+        harness.AuditSink.Events.ShouldNotContain(
+            item => item.EventType == AuditEventType.ActionExecution);
     }
 
     /// <summary>Verifies mandatory audit persistence failure prevents a workflow result and side effect.</summary>

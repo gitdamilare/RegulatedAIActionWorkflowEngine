@@ -17,7 +17,7 @@ public enum ActionStatus
     /// <summary>Trustworthy evidence was unavailable or inconsistent.</summary>
     BlockedEvidenceUnavailable,
 
-    /// <summary>The evidence was valid, but action execution is not available.</summary>
+    /// <summary>The executor reported that no regulated effect occurred.</summary>
     BlockedExecutionUnavailable,
 
     /// <summary>The regulated action was executed after all applicable gates passed.</summary>
