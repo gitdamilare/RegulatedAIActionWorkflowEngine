@@ -17,6 +17,8 @@ public sealed class WorkflowEndpointTests
     public static TheoryData<string, string> BindingFailureBodies => new()
     {
         { "Malformed JSON", "{" },
+        { "Null body", "null" },
+        { "Empty body", "" },
         {
             "Numeric action",
             """

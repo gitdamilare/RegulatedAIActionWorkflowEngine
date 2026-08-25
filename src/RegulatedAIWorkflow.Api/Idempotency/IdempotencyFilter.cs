@@ -30,8 +30,14 @@ internal sealed class IdempotencyFilter(IDistributedCache cache) : IEndpointFilt
                 title: "A single valid Idempotency-Key header is required.");
         }
 
+        if (context.Arguments.OfType<WorkflowRequest>().SingleOrDefault() is not { } request)
+        {
+            // The body did not bind, so there is no request to key on. Defer to the
+            // framework binding-failure response that unfiltered routes already return.
+            return await next(context);
+        }
+
         var principal = identity.Principal!;
-        var request = context.Arguments.OfType<WorkflowRequest>().Single();
         var cacheKey = $"workflow-idempotency:{Fingerprint(new CacheScope(
             principal.TenantId,
             request.RequestedAction,

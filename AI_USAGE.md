@@ -38,7 +38,7 @@ These are the ones that changed the shape of the solution.
 
 ## Proving the tests bite
 
-A test that has never been observed failing is not yet evidence. "112 tests pass" is a volume claim, so before submitting I broke each load-bearing guard, ran the full suite, recorded what caught it, and restored the guard. Those mutation experiments used the preceding 101-test baseline; three execution-outcome cases raised it to 104, and eight sequential idempotency cases now cover header validation, replay, conflict, scope isolation, retry, and secret absence for 112 passed, 0 failed, and 0 skipped.
+A test that has never been observed failing is not yet evidence. "115 tests pass" is a volume claim, so before submitting I broke each load-bearing guard, ran the full suite, recorded what caught it, and restored the guard. Those mutation experiments used the preceding 101-test baseline; three execution-outcome cases raised it to 104, eight sequential idempotency cases covering header validation, replay, conflict, scope isolation, retry, and secret absence raised it to 112, and three body-binding cases added after a review found an unbound-body 500 bring it to 115 passed, 0 failed, and 0 skipped.
 
 | Guard removed | Result |
 |---|---|
@@ -46,6 +46,7 @@ A test that has never been observed failing is not yet evidence. "112 tests pass
 | Both scope layers: Core check **and** the repository adapter filter | **18 failed** across 5 suites |
 | Every approval binding: action, vendor, policy version, evidence hash, validity window, self-approval, approver role | 7 failed |
 | Audit-before-effect ordering, by moving the attempt write after the executor call | 2 failed, both of them the ordering tests |
+| The unbound-body guard in `IdempotencyFilter`, restored to its original `.Single()` | 3 failed, all three the new body-binding cases |
 | **A prose field on `RiskEvaluationInput`** | **1 failed, before the field was ever read** |
 
 Two rows are worth explaining.
@@ -68,12 +69,15 @@ AI output was treated as a draft, not as evidence. These are the corrections tha
 | An approval was called "independent" at the moment it was recorded. | Independence is established when a requester later presents the approval and Core compares requester against approver. Name the exact point a property is enforced. | `ApprovalGate` self-approval branch, [Required_2_ApprovalGateTests.cs](tests/RegulatedAIWorkflow.Tests/Required/Required_2_ApprovalGateTests.cs) |
 | The HTTP sequence was written as though an approval targeted the earlier blocked workflow. | Approval is reusable scope authorization bound to tenant, vendor, action, evidence, policy, approver, and time. No `workflowId` reaches the gate. Do not invent a lifecycle the code does not contain. | `ApprovalGate` binding checks, `9e729dd` |
 | A replay and exactly-once example was proposed before any idempotency mechanism existed. | The exactly-once claim was removed. A later endpoint-filter implementation, adapted from the user-supplied Milan Jovanović article, now supports one-hour sequential replay while explicitly retaining the article's check-then-set race as a production threat. | [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md) idempotency section, [THREAT_NOTES.md](THREAT_NOTES.md) |
+| The idempotency endpoint filter read its bound body with `context.Arguments.OfType<WorkflowRequest>().Single()`. | A `null` or empty JSON body binds to nothing, so `Single()` threw and `/workflows/run` returned an unhandled 500 where both the documented contract and the unfiltered `/approvals` route return a 400 Problem Details. The filter now defers an unbound body to the framework binding-failure path. A filter must not assume the argument it exists to inspect was bound. | [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs), the `BindingFailureBodies` null and empty cases, and [WorkflowIdempotencyTests.cs](tests/RegulatedAIWorkflow.Tests/Api/WorkflowIdempotencyTests.cs) |
 
 **Residual risk.** The AI-drafted code carrying the least adversarial pressure is the in-memory infrastructure adapters and the DTO mapping layer, precisely because they are the parts scheduled for replacement in production. A defect hiding there would most likely be a mapping or fixture error rather than a control bypass, but I have not proved that, and it is where I would look first.
 
+**Outcome.** A review then found exactly one such defect, and its kind matched this prediction while its location did not. `IdempotencyFilter` called `.Single()` on an argument list that is empty when the JSON body fails to bind, so an unbound body returned 500 instead of the documented 400. That is a robustness bug at the HTTP boundary rather than a control bypass, exactly the failure mode predicted above, but it sat in the newest hand-directed feature rather than in the adapters I had flagged as least examined. The correction I take from it is that recency of change predicts defect location better than my intuition about which code received the least adversarial pressure.
+
 ## Verification
 
-I required the assistant to run checks rather than describe them. As of 2026-08-25, in the working tree based on `730ba32`: `dotnet build -c Release` gives 0 warnings and 0 errors, `dotnet test -c Release` gives 112 passed / 0 failed / 0 skipped, and `dotnet format --verify-no-changes` is clean. The five mutation experiments above were each reverted and re-verified against the preceding 101-test baseline.
+I required the assistant to run checks rather than describe them. As of 2026-08-26, in the working tree at `d003bc9` with the unbound-body fix applied: `dotnet build -c Release` gives 0 warnings and 0 errors, `dotnet test -c Release` gives 115 passed / 0 failed / 0 skipped, and `dotnet format --verify-no-changes` is clean. The six mutation experiments above were each reverted and re-verified.
 
 An earlier milestone taught this the hard way: generated files carried CRLF endings against an `.editorconfig` requiring LF. Build and tests both passed and the formatting gate still failed. A successful compile is not a complete verification result, so every declared gate gets run.
 
@@ -89,6 +93,6 @@ It could assist with retrieval, ranking, candidate fact extraction, or explanati
 
 ## Where AI helped most, and least
 
-Most: mechanical breadth. 112 tests and four documents inside a sensible window would not have happened by hand, and the edge-case coverage is directly attributable to that speed.
+Most: mechanical breadth. 115 tests and four documents inside a sensible window would not have happened by hand, and the edge-case coverage is directly attributable to that speed.
 
 Least: judgment about what is actually true. The over-engineered HTTP boundary and the proposed replay example share a shape with every correction in the table above. Each was locally plausible, internally consistent, and globally wrong, visible only to someone who already knew what the system was supposed to mean. That is an argument for this architecture rather than against the tool: the parts that decide things are small, deterministic, and readable in one sitting, because that is the part a reviewer, an auditor, and I all have to check by hand.

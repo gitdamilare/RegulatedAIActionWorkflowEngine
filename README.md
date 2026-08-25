@@ -34,7 +34,7 @@ Ordered as the pipeline runs, not as the concerns were listed: the structural bo
 | Prompt injection | the absence of any effect | [RiskEvaluationInput.cs](src/RegulatedAIWorkflow.Core/Domain/Risk/RiskEvaluationInput.cs), [UntrustedText.cs](src/RegulatedAIWorkflow.Core/Domain/Evidence/UntrustedText.cs) | [Required_4_PromptInjectionTests](tests/RegulatedAIWorkflow.Tests/Required/Required_4_PromptInjectionTests.cs) |
 | Safe logging | none; prose is absent from every field | `UntrustedText.ToString`, [AuditEvent.cs](src/RegulatedAIWorkflow.Core/Contracts/Audit/AuditEvent.cs) | [UntrustedTextTests](tests/RegulatedAIWorkflow.Tests/Domain/Evidence/UntrustedTextTests.cs), [Required_4_PromptInjectionTests](tests/RegulatedAIWorkflow.Tests/Required/Required_4_PromptInjectionTests.cs) |
 
-The four `Required_*` files map one-to-one onto the tests the brief asks for, including its optional bonus, and contribute 37 of the 112 tests.
+The four `Required_*` files map one-to-one onto the tests the brief asks for, including its optional bonus, and contribute 37 of the 115 tests.
 
 ## Architecture and trust boundaries
 
@@ -292,7 +292,7 @@ dotnet run --project src/RegulatedAIWorkflow.Api -c Release
 
 The default HTTP launch profile listens on `http://localhost:5000`.
 
-Verified on 2026-08-25 in the working tree based on commit `730ba32`: Release build succeeded with 0 warnings and 0 errors; 112 tests passed, 0 failed, 0 skipped; `dotnet format --verify-no-changes` succeeded. These tests prove the listed sequential in-process behavior. They do not prove concurrent or multi-instance deduplication, durable recovery, cryptographic identity, or a real downstream side effect.
+Verified on 2026-08-26 in the working tree at commit `d003bc9` with the unbound-body fix applied: Release build succeeded with 0 warnings and 0 errors; 115 tests passed, 0 failed, 0 skipped; `dotnet format --verify-no-changes` succeeded. These tests prove the listed sequential in-process behavior. They do not prove concurrent or multi-instance deduplication, durable recovery, cryptographic identity, or a real downstream side effect.
 
 ## Adding the interview follow-up action
 

@@ -51,6 +51,35 @@ public sealed class WorkflowIdempotencyTests
         problem.Status.ShouldBe(StatusCodes.Status400BadRequest, scenario);
     }
 
+    /// <summary>An unbound body fails binding without claiming the idempotency key.</summary>
+    [Fact]
+    public async Task PostAsync_UnboundBody_ReturnsBindingFailureAndLeavesKeyUnclaimed()
+    {
+        const string key = "6f4b0f2e-88a4-4a3e-9a24-2f1c6d7b0e51";
+        var executor = new CountingActionExecutor();
+        await using var factory = CreateFactory(executor);
+        using var client = factory.CreateClient();
+
+        using (var unboundRequest = Create("/workflows/run", "null", idempotencyKey: key))
+        using (var unboundResponse = await client.SendAsync(unboundRequest))
+        {
+            unboundResponse.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+            unboundResponse.Content.Headers.ContentType?.MediaType.ShouldBe(
+                "application/problem+json");
+        }
+
+        var approval = await IssueApprovalAsync(client);
+        using var validRequest = Create(
+            "/workflows/run",
+            ApprovedBody(approval.ApprovalId),
+            idempotencyKey: key);
+        using var validResponse = await client.SendAsync(validRequest);
+        var executed = await ReadAsync<WorkflowResponse>(validResponse);
+
+        executed.ActionStatus.ShouldBe("executed");
+        executor.CallCount.ShouldBe(1);
+    }
+
     /// <summary>A sequential retry returns the original response without another effect or audit.</summary>
     [Fact]
     public async Task PostAsync_SequentialReplay_ReturnsOriginalResponse()
