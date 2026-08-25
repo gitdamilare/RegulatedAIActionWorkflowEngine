@@ -4,7 +4,7 @@ A .NET 10 workflow slice that answers one question with consequences: *may this 
 
 It is not an AI. It is the harness that sits between a model's opinion and an irreversible act.
 
-> **Prototype boundary:** this repository demonstrates application-level trust boundaries in one process. Caller identity is asserted through headers, all repositories and effects are in memory, and repeated requests are not deduplicated. It does not provide production authentication, durable storage, transactional execution, distributed idempotency, or tamper-evident audit.
+> **Prototype boundary:** this repository demonstrates application-level trust boundaries in one process. Caller identity is asserted through headers, all repositories and effects are in memory, and successful sequential HTTP retries are replayed for 60 minutes. It does not provide production authentication, durable storage, transactional execution, concurrency-safe or distributed idempotency, or tamper-evident audit.
 
 ## The one idea
 
@@ -25,6 +25,7 @@ Ordered as the pipeline runs, not as the concerns were listed: the structural bo
 | Concern | Response field | Decided in | Proven by |
 |---|---|---|---|
 | Layer boundaries | none; enforced at compile time | Core owns policy and ports, Api only binds | [ArchitectureBoundaryTests](tests/RegulatedAIWorkflow.Tests/Architecture/ArchitectureBoundaryTests.cs), [InfrastructureBoundaryTests](tests/RegulatedAIWorkflow.Tests/Architecture/InfrastructureBoundaryTests.cs) |
+| Sequential HTTP replay | original successful response | [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs), before Core runs | [WorkflowIdempotencyTests](tests/RegulatedAIWorkflow.Tests/Api/WorkflowIdempotencyTests.cs) |
 | Unauthorized role | `403`, no evidence-derived data | [ActionAuthorizationPolicy.cs](src/RegulatedAIWorkflow.Core/Application/ActionAuthorizationPolicy.cs), before retrieval | [Required_3_AuditTrailTests](tests/RegulatedAIWorkflow.Tests/Required/Required_3_AuditTrailTests.cs), for `Viewer` and `RiskApprover` |
 | Tenant isolation | `citations`, `recommendation` | [EvidenceSecurity.cs](src/RegulatedAIWorkflow.Core/Application/EvidenceSecurity.cs) plus an independent adapter filter | [Required_1_TenantIsolationTests](tests/RegulatedAIWorkflow.Tests/Required/Required_1_TenantIsolationTests.cs), [EvidenceSecurityTests](tests/RegulatedAIWorkflow.Tests/Application/Evidence/EvidenceSecurityTests.cs) |
 | Citation provenance | `citations` | [VerifiedCitationResolver.cs](src/RegulatedAIWorkflow.Core/Application/Workflow/VerifiedCitationResolver.cs) | [WorkflowSecurityTests](tests/RegulatedAIWorkflow.Tests/Application/WorkflowSecurityTests.cs) |
@@ -33,7 +34,7 @@ Ordered as the pipeline runs, not as the concerns were listed: the structural bo
 | Prompt injection | the absence of any effect | [RiskEvaluationInput.cs](src/RegulatedAIWorkflow.Core/Domain/Risk/RiskEvaluationInput.cs), [UntrustedText.cs](src/RegulatedAIWorkflow.Core/Domain/Evidence/UntrustedText.cs) | [Required_4_PromptInjectionTests](tests/RegulatedAIWorkflow.Tests/Required/Required_4_PromptInjectionTests.cs) |
 | Safe logging | none; prose is absent from every field | `UntrustedText.ToString`, [AuditEvent.cs](src/RegulatedAIWorkflow.Core/Contracts/Audit/AuditEvent.cs) | [UntrustedTextTests](tests/RegulatedAIWorkflow.Tests/Domain/Evidence/UntrustedTextTests.cs), [Required_4_PromptInjectionTests](tests/RegulatedAIWorkflow.Tests/Required/Required_4_PromptInjectionTests.cs) |
 
-The four `Required_*` files map one-to-one onto the tests the brief asks for, including its optional bonus, and contribute 37 of the 104 tests.
+The four `Required_*` files map one-to-one onto the tests the brief asks for, including its optional bonus, and contribute 37 of the 112 tests.
 
 ## Architecture and trust boundaries
 
@@ -43,6 +44,7 @@ flowchart LR
 
   subgraph API["RegulatedAIWorkflow.Api"]
     BIND["Bind identity headers and JSON<br/>401 or 400 before Core runs"]
+    IDEM["Idempotency filter<br/>replay cached execution or continue"]
   end
 
   subgraph CORE["RegulatedAIWorkflow.Core - the only authority"]
@@ -62,7 +64,9 @@ flowchart LR
   end
 
   CALLER -->|"asserted headers and untrusted JSON"| BIND
-  BIND --> AUTH --> SCOPE
+  BIND --> IDEM
+  IDEM -->|"cache miss"| AUTH --> SCOPE
+  IDEM -.->|"sequential replay"| CALLER
   SCOPE -->|"tenant and vendor query"| EV
   SCOPE -->|"typed facts"| RISK
   SCOPE -.->|"prose: display path only"| CITE
@@ -80,6 +84,7 @@ Project dependencies point inward. `Core` owns contracts, policy, orchestration,
 | Boundary | Prototype behavior | Important limitation |
 |---|---|---|
 | HTTP identity | One bounded `X-Tenant-Id`, `X-User-Id`, and `X-User-Role` value each, validated into one Core principal. | The headers are caller assertions, not authenticated claims. |
+| HTTP replay | One GUID `Idempotency-Key`; a matching executed response is replayed for 60 minutes. Changed input returns 409. | The cache is process-local and check-then-set is not atomic, so simultaneous requests can both execute. Replays create no new audit event. |
 | Authorization | Server-owned action policy denies unknown roles and actions, and runs before retrieval. | No identity provider, tenant-membership lookup, step-up authentication, or live entitlement check. |
 | Evidence | The repository filters by tenant and vendor; Core independently rechecks every document and fact and rejects any scope inconsistency. | Seeded typed facts are trusted prototype data. There is no controlled ingestion or extraction pipeline. |
 | External prose | `UntrustedText` has explicit construction, bounded display, a content fingerprint, and redacted `ToString()`. | Returned citations carry bounded untrusted prose and must still be rendered as data by clients. |
@@ -90,6 +95,8 @@ Project dependencies point inward. `Core` owns contracts, policy, orchestration,
 ## The pipeline
 
 [`WorkflowOrchestrator.RunAsync`](src/RegulatedAIWorkflow.Core/Application/Workflow/WorkflowOrchestrator.cs) keeps the security-sensitive order visible in one file. Stage ordering is a compliance property here, so it lives in readable straight-line code rather than in dependency registration.
+
+Before this Core pipeline starts, `/workflows/run` requires one GUID `Idempotency-Key`. The API hashes the tenant/action/vendor/key scope and the complete asserted identity and body. A matching executed response is replayed for 60 minutes; changed input returns 409. Blocked and failed responses are not cached. The cache performs a separate lookup and write, so simultaneous misses can both enter the pipeline and execute.
 
 1. Validate bounded identity, vendor, question, action, and optional approval ID.
 2. Authorize the role and action pair before retrieving evidence.
@@ -106,7 +113,7 @@ Two properties are worth stating plainly. Authorization happens at step 2, befor
 
 ### Where each path ends
 
-Every terminal path is audited, and no path blocked by validation, authorization, evidence, or approval reaches the executor. `AuditEventIds` in the response contains only ids that were successfully written, because the id is appended after the sink returns.
+Every terminal path that reaches Core is audited, and no path blocked by validation, authorization, evidence, or approval reaches the executor. `AuditEventIds` in the response contains only ids that were successfully written, because the id is appended after the sink returns. A cached sequential replay is the deliberate exception: it returns the original workflow and audit ids without creating a new Core attempt.
 
 | Guard that fails | `actionStatus` | Audit events, in order |
 |---|---|---|
@@ -171,6 +178,8 @@ Honest limits: the approval is not bound to a `workflowId`, because this prototy
 
 Identity is three headers: `X-Tenant-Id`, `X-User-Id`, `X-User-Role`. The brief permits a simple role field in place of a real identity provider. Binding failures return Problem Details **before Core runs**, so no audit event is written for them: 401 when a header is missing, 400 when one is malformed.
 
+`POST /workflows/run` also requires exactly one `Idempotency-Key` containing a GUID. The filter hashes the key as part of its cache scope and stores only a SHA-256 request fingerprint with the response. Reusing a cached tenant/action/vendor/key scope with a different caller or body returns `409 Conflict`. This is a one-hour response cache, not an authentication credential or durable operation record.
+
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/health` | Static liveness only; it does not check repositories or workflow readiness. |
@@ -182,14 +191,16 @@ Identity is three headers: `X-Tenant-Id`, `X-User-Id`, `X-User-Role`. The brief 
 | `executed`, `blocked_pending_approval`, `blocked_evidence_unavailable`, `denied_unknown_subject` | 200 | full workflow response |
 | `blocked_invalid_request` | 400 | workflow response with `riskLevel: "unknown"` |
 | `blocked_unauthorized` | 403 | workflow response with no evidence-derived data |
+| executor reports no effect | 503 | workflow response with `actionStatus: "blocked_execution_unavailable"` |
+| cached key reused with different input | 409 | Problem Details; Core does not run |
 
-Two deliberate choices. A refusal returns **200 with a structured body**, not a 4xx: the evaluation succeeded and produced a "no", and the caller needs the reasons, citations, and audit ids. A cross-tenant subject returns `denied_unknown_subject` rather than 403, because a 403 would confirm the vendor exists in someone else's tenant. Note the asymmetry: `/approvals` returns 404 for an unknown vendor, which is acceptable because only a same-tenant `RiskApprover` reaches that code path.
+Three deliberate choices. A refusal returns **200 with a structured body**, not a 4xx: the evaluation succeeded and produced a "no", and the caller needs the reasons, citations, and audit ids. Those business refusals are not cached even though they use HTTP 200. A cross-tenant subject returns `denied_unknown_subject` rather than 403, because a 403 would confirm the vendor exists in someone else's tenant. A successful sequential retry receives the original response rather than a new workflow record. Note the asymmetry: `/approvals` returns 404 for an unknown vendor, which is acceptable because only a same-tenant `RiskApprover` reaches that code path.
 
-There is deliberately no public audit-read endpoint, demo endpoint, or idempotency-key field.
+There is deliberately no public audit-read endpoint, demo endpoint, or idempotency-key body field. The key belongs in the HTTP header.
 
 ## HTTP examples
 
-IDs, hashes, and timestamps are placeholders. [RegulatedAIWorkflow.Api.http](src/RegulatedAIWorkflow.Api/RegulatedAIWorkflow.Api.http) runs all seven scenarios and chains the approval id automatically.
+IDs, hashes, and timestamps are placeholders. [RegulatedAIWorkflow.Api.http](src/RegulatedAIWorkflow.Api/RegulatedAIWorkflow.Api.http) runs all eight scenarios, chains the approval id automatically, and demonstrates a sequential replay.
 
 ### High-risk work is blocked without approval
 
@@ -200,6 +211,7 @@ Content-Type: application/json
 X-Tenant-Id: northstar-bank
 X-User-Id: procurement-user
 X-User-Role: ProcurementManager
+Idempotency-Key: e0d5a7a7-e1aa-493d-b43c-856375f59e30
 
 {
   "vendorId": "silverline-payments",
@@ -238,7 +250,7 @@ This is `200 OK`. The executor was not called. The corpus behind it includes a v
 
 ### The requester presents an approval, and the risk stays high
 
-A `RiskApprover` first records one with `POST /approvals`, receiving `201 Created` and an `apr-<uuid>`. The requester then re-runs the same workflow with `"approvalId": "apr-<uuid>"`:
+A `RiskApprover` first records one with `POST /approvals`, receiving `201 Created` and an `apr-<uuid>`. The requester then re-runs the same workflow with a new `Idempotency-Key` and `"approvalId": "apr-<uuid>"`:
 
 ```json
 {
@@ -252,6 +264,8 @@ A `RiskApprover` first records one with `POST /approvals`, receiving `201 Create
 
 The reasons, citations, and missing evidence are all still present and unchanged. A signature authorizes; it does not discharge. `executed` means the in-memory mock executor recorded an invocation, not that a durable external change occurred.
 
+Repeating that identical approved request sequentially with the same key within 60 minutes returns the same `workflowId`, body, and `auditEventIds`. It does not call Core or the executor again. Use a different key for the initial blocked assessment and later approved execution because their payloads differ.
+
 ### The remaining scenarios
 
 | Scenario | Identity | Result |
@@ -261,6 +275,8 @@ The reasons, citations, and missing evidence are all still present and unchanged
 | Requester tries to self-approve | `ProcurementManager` calling `/approvals` | `403` Problem Details |
 | Cross-tenant subject | `harborview-bank` asking about `lakeshore-analytics` | `200`, `denied_unknown_subject`, indistinguishable from an unknown Harborview vendor |
 | Missing identity headers | none | `401` Problem Details, no audit event |
+| Successful sequential replay | identical scope, caller, body, and `Idempotency-Key` | original `200` response, no second executor call or audit event |
+| Reused cached key with changed input | same tenant/action/vendor/key but different caller or body | `409` Problem Details, no Core invocation |
 
 ## Build, run, verify
 
@@ -276,13 +292,13 @@ dotnet run --project src/RegulatedAIWorkflow.Api -c Release
 
 The default HTTP launch profile listens on `http://localhost:5000`.
 
-Verified on 2026-08-25 in the working tree based on commit `607fc8c`: Release build succeeded with 0 warnings and 0 errors; 104 tests passed, 0 failed, 0 skipped; `dotnet format --verify-no-changes` succeeded. These tests prove the listed in-process behavior. They do not prove multi-instance correctness, durable recovery, cryptographic identity, or a real downstream side effect.
+Verified on 2026-08-25 in the working tree based on commit `730ba32`: Release build succeeded with 0 warnings and 0 errors; 112 tests passed, 0 failed, 0 skipped; `dotnet format --verify-no-changes` succeeded. These tests prove the listed sequential in-process behavior. They do not prove concurrent or multi-instance deduplication, durable recovery, cryptographic identity, or a real downstream side effect.
 
 ## Adding the interview follow-up action
 
 The brief names `exportPrivilegedSummary` as the live change. It is one `WorkflowAction` enum value, one `WorkflowActionPolicy` entry in [WorkflowActionPolicies.cs](src/RegulatedAIWorkflow.Core/Application/WorkflowActionPolicies.cs) declaring its baseline risk, requester roles, and approver roles, and one wire-string case in [WorkflowDtos.cs](src/RegulatedAIWorkflow.Api/Dtos/WorkflowDtos.cs). Authorization, the approval gate, citation verification, audit ordering, and the executor call are all inherited rather than reimplemented.
 
-Adding the enum value *without* the policy entry fails closed and is already tested: `DeterministicRiskEvaluatorTests.EvaluateRisk_UnrecognizedAction_ThrowsInvalidOperationException` covers both `WorkflowAction.Unknown` and an undeclared `(WorkflowAction)999`. Preventing duplicate execution is the genuinely hard half of that question, and it is production work rather than a code change here; see the idempotency section of [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md).
+Adding the enum value *without* the policy entry fails closed and is already tested: `DeterministicRiskEvaluatorTests.EvaluateRisk_UnrecognizedAction_ThrowsInvalidOperationException` covers both `WorkflowAction.Unknown` and an undeclared `(WorkflowAction)999`. The API filter automatically includes the new action in its cache scope, but preventing concurrent, cross-instance, or post-expiry duplicates remains production work; see the idempotency section of [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md).
 
 ## Deliberate scope
 
@@ -296,7 +312,8 @@ Adding the enum value *without* the policy entry fails closed and is already tes
 | Thread-safe in-memory approval, audit, and executor adapters | Persistence, multi-instance coordination, or disaster recovery |
 | Structured audit-before-effect ordering | Atomic audit and effect transaction, or tamper evidence |
 | Mock recorded action invocation | Real vendor-system integration or irreversible effect |
-| Repeatable deterministic tests | Idempotency or exactly-once execution |
+| One-hour sequential HTTP-response replay | Concurrent, durable, or distributed idempotency; per-replay audit; or exactly-once execution |
+| Repeatable deterministic tests | Multi-instance, restart, expiry, crash-window, or downstream deduplication guarantees |
 | Static `/health` liveness | Dependency readiness, telemetry, alerting, or operational SLOs |
 
 ## Repository layout
@@ -316,4 +333,4 @@ tests/RegulatedAIWorkflow.Tests/         domain, application, adapter, architect
 
 ## One-minute explanation
 
-I built a regulated-action workflow in which external evidence can inform a recommendation but cannot authorize an effect. The API validates caller assertions, then Core authorizes before retrieval, scopes evidence twice, evaluates deterministic policy over typed facts, verifies every citation, and requires a different risk approver bound to the current tenant, vendor, action, evidence, policy, and time window. The risk stays High even after approval. Structured audit authorization is written before the mock executor runs, and tests prove blocked paths never invoke it. The important boundary is honesty: identity, storage, audit, and effects are all single-process prototype components. Production would require authenticated claims, tenant-aware durable stores, transactional outbox-based execution, distributed idempotency, tamper-evident audit, observability, encryption, secrets management, retention governance, controlled policy rollout, and tested recovery.
+I built a regulated-action workflow in which external evidence can inform a recommendation but cannot authorize an effect. The API validates caller assertions and a GUID idempotency key, then Core authorizes before retrieval, scopes evidence twice, evaluates deterministic policy over typed facts, verifies every citation, and requires a different risk approver bound to the current tenant, vendor, action, evidence, policy, and time window. The risk stays High even after approval. Structured audit authorization is written before the mock executor runs, and tests prove blocked paths never invoke it. Identical successful sequential retries replay one response for an hour, but the cache has an intentional concurrent miss race and is neither durable nor distributed. Production would require authenticated claims, tenant-aware durable stores, transactional outbox-based execution, atomic distributed idempotency, tamper-evident audit, observability, encryption, secrets management, retention governance, controlled policy rollout, and tested recovery.

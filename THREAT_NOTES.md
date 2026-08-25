@@ -149,16 +149,19 @@ Alert on self-approval attempts, mismatches, supersession, expired use, unusual 
 - An executor call that ends without a definitive result is audited as `ExecutionOutcomeUnknown` and propagated for reconciliation rather than presented as a clean failure.
 - In-memory adapters use thread-safe collections, so concurrent writes do not corrupt their collections.
 - Exceptions and cancellation are audited and propagated rather than converted into a successful business result.
+- `/workflows/run` requires one GUID `Idempotency-Key`; the API hashes its tenant/action/vendor scope and complete request identity.
+- A matching executed response is replayed for 60 minutes, while changed input returns 409 and blocked or failed responses remain retryable.
+- The raw key is absent from workflow responses and structured Core audit events.
 
 ### Residual risk
 
-There is no idempotency key, coordinator, uniqueness constraint, distributed lock, durable execution state, transaction, outbox, inbox, or downstream idempotency token. Thread-safe collections do not deduplicate work. Two valid requests can produce two mock invocations, and a restart loses every record.
+The endpoint filter has no atomic claim, uniqueness constraint, distributed lock, durable execution state, transaction, outbox, inbox, or downstream idempotency token. Its cache read and write are separate, so simultaneous valid requests can both produce mock invocations. Direct Core calls bypass it, a restart loses every entry, and expiry permits the same operation to execute again after 60 minutes. Cached replays also create no separate Core audit event.
 
-Audit-before-effect ordering improves traceability but is not atomicity. It cannot close either crash window or prove the outcome of an external call. The trail now marks the unknown-outcome window explicitly, but the included executor still records only a local mock success and no real irreversible integration is exercised. Production still requires the outbox, stable idempotency token, and reconciliation design below.
+Audit-before-effect ordering and sequential response replay improve traceability and ordinary retry behavior, but neither is atomicity. A cache-write failure or crash after the effect reopens duplicate execution; a crash before the effect can leave an authorized attempt with no outcome. The trail marks an observed unknown-outcome window explicitly, but the included executor still records only a local mock success and no real irreversible integration is exercised. Production still requires the outbox, atomic durable operation claim, stable downstream token, and reconciliation design below.
 
 ### Production mitigation: not implemented
 
-- Require a bounded client idempotency key and scope it unambiguously by tenant, action, vendor, and operation semantics.
+- Preserve the bounded client idempotency contract and scope it unambiguously by authenticated tenant, action, vendor, and operation semantics.
 - Atomically claim that key in durable storage with a unique constraint and store the request fingerprint, execution state, and final response.
 - Coordinate concurrent callers on the same durable operation and never use a check-then-act dictionary pattern.
 - Commit business intent, authorization evidence, and an outbox record in one local transaction.

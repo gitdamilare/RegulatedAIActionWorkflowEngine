@@ -14,7 +14,7 @@ This document describes what must replace or surround the single-process prototy
 | [InMemoryAuditSink.cs](src/RegulatedAIWorkflow.Infrastructure/Audit/InMemoryAuditSink.cs) | A queue that is append-only because the interface exposes nothing else | An access-controlled store with linked entries and externally anchored checkpoints |
 | [InMemoryActionExecutor.cs](src/RegulatedAIWorkflow.Infrastructure/Execution/InMemoryActionExecutor.cs) | The executor records the request and always reports success | Durable execution state and a downstream adapter that can report real failure |
 | [WorkflowOrchestrator.cs:206-212](src/RegulatedAIWorkflow.Core/Application/Workflow/WorkflowOrchestrator.cs#L206-L212) | Audit is written before the effect, but as separate operations | Transactional intent through an outbox, with reconciliation of uncertain outcomes |
-| [WorkflowDtos.cs:9-13](src/RegulatedAIWorkflow.Api/Dtos/WorkflowDtos.cs#L9-L13) | The request carries no idempotency key, so a client retry executes twice | Tenant-scoped durable deduplication and a stable token passed downstream |
+| [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs) | A GUID header replays sequential successful responses for 60 minutes in one process | Atomic tenant-scoped durable deduplication and a stable token passed downstream |
 | [Program.cs:42](src/RegulatedAIWorkflow.Api/Program.cs#L42) | `/health` returns a static literal | Readiness that fails when audit or identity dependencies are unusable |
 | [RiskPolicies.cs:13](src/RegulatedAIWorkflow.Core/Application/Risk/RiskPolicies.cs#L13) | One policy version selected in code and recorded on every decision | A governed registry with shadow evaluation, staged rollout, and rollback |
 | [Program.cs:27-31](src/RegulatedAIWorkflow.Api/Program.cs#L27-L31) | Every adapter is an in-memory singleton, so a restart loses all state | Backups, point-in-time restore, and reconciliation that preserves idempotency state |
@@ -85,11 +85,13 @@ Compensation is domain-specific and may be impossible for an irreversible action
 
 ## Distributed idempotency and retries
 
-[WorkflowRequest](src/RegulatedAIWorkflow.Api/Dtos/WorkflowDtos.cs#L9-L13) carries no idempotency key, and [InMemoryActionExecutor.cs](src/RegulatedAIWorkflow.Infrastructure/Execution/InMemoryActionExecutor.cs) invokes once for each valid workflow request. Thread-safe in-memory collections do not provide deduplication.
+`POST /workflows/run` requires one GUID `Idempotency-Key`. [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs) hashes a tenant/action/vendor/key scope, stores a second fingerprint over the asserted identity and full request, and replays a matching executed response for 60 minutes. Key reuse with changed input returns 409. Blocked and failed results are not cached, which matters because valid business refusals use HTTP 200.
+
+The registered `AddDistributedMemoryCache` implementation is process-local despite the interface name. The filter performs a separate read and write with no lock or atomic claim, so simultaneous equivalent requests can both miss and execute. Entries disappear on restart and expire after one hour; direct Core callers bypass the filter; cached replays return the original workflow and audit identifiers without recording a new attempt. A cache-write failure or crash after the effect leaves no replay record and can permit a duplicate retry.
 
 Production should:
 
-- Require a bounded, opaque client idempotency key for mutating requests.
+- Continue requiring a bounded, opaque client idempotency key for mutating requests, but authenticate the caller supplying it.
 - Scope the durable key by tenant, action, vendor/subject, and operation semantics; never use the client key alone.
 - Store a canonical request fingerprint so reuse of the same key with different input is rejected.
 - Claim the key atomically with a unique constraint before any downstream effect.
@@ -97,6 +99,7 @@ Production should:
 - Coordinate simultaneous callers on the same durable record across all service instances.
 - Pass a stable idempotency token downstream and retain it through retry and reconciliation.
 - Audit only a fingerprint of a potentially secret client key.
+- Retain completed records through the supported retry and recovery window rather than using a generic one-hour expiry.
 
 Retry only classified transient failures with bounded exponential backoff and jitter. A failed, cancelled, or abandoned claim needs an explicit recovery rule; it must neither permit two workers nor block the operation forever. Treat a timeout after dispatch as Unknown, not Failed, until reconciliation proves whether the effect happened.
 

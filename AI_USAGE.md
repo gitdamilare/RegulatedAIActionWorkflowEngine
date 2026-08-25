@@ -38,7 +38,7 @@ These are the ones that changed the shape of the solution.
 
 ## Proving the tests bite
 
-A test that has never been observed failing is not yet evidence. "104 tests pass" is a volume claim, so before submitting I broke each load-bearing guard, ran the full suite, recorded what caught it, and restored the guard. Those mutation experiments used the preceding 101-test baseline; the current suite adds three execution-outcome tests and passes 104, with 0 failed and 0 skipped.
+A test that has never been observed failing is not yet evidence. "112 tests pass" is a volume claim, so before submitting I broke each load-bearing guard, ran the full suite, recorded what caught it, and restored the guard. Those mutation experiments used the preceding 101-test baseline; three execution-outcome cases raised it to 104, and eight sequential idempotency cases now cover header validation, replay, conflict, scope isolation, retry, and secret absence for 112 passed, 0 failed, and 0 skipped.
 
 | Guard removed | Result |
 |---|---|
@@ -67,13 +67,13 @@ AI output was treated as a draft, not as evidence. These are the corrections tha
 | The HTTP boundary was over-engineered: duplicated wire enums, a large mapper, manual JSON handling. | Reduced to small DTOs, header binding, explicit status mapping, real-host tests. Validation belongs at real trust boundaries, not wherever abstraction is possible. | [WorkflowDtos.cs](src/RegulatedAIWorkflow.Api/Dtos/WorkflowDtos.cs), `3ca0b50` |
 | An approval was called "independent" at the moment it was recorded. | Independence is established when a requester later presents the approval and Core compares requester against approver. Name the exact point a property is enforced. | `ApprovalGate` self-approval branch, [Required_2_ApprovalGateTests.cs](tests/RegulatedAIWorkflow.Tests/Required/Required_2_ApprovalGateTests.cs) |
 | The HTTP sequence was written as though an approval targeted the earlier blocked workflow. | Approval is reusable scope authorization bound to tenant, vendor, action, evidence, policy, approver, and time. No `workflowId` reaches the gate. Do not invent a lifecycle the code does not contain. | `ApprovalGate` binding checks, `9e729dd` |
-| A replay and exactly-once example was proposed although no idempotency coordinator exists. | All exactly-once claims removed; duplicate execution is now a named threat and idempotency is production work. Reliability claims need executable coordination, not thread-safe collections. | [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md) idempotency section, [THREAT_NOTES.md](THREAT_NOTES.md) |
+| A replay and exactly-once example was proposed before any idempotency mechanism existed. | The exactly-once claim was removed. A later endpoint-filter implementation, adapted from the user-supplied Milan Jovanović article, now supports one-hour sequential replay while explicitly retaining the article's check-then-set race as a production threat. | [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md) idempotency section, [THREAT_NOTES.md](THREAT_NOTES.md) |
 
 **Residual risk.** The AI-drafted code carrying the least adversarial pressure is the in-memory infrastructure adapters and the DTO mapping layer, precisely because they are the parts scheduled for replacement in production. A defect hiding there would most likely be a mapping or fixture error rather than a control bypass, but I have not proved that, and it is where I would look first.
 
 ## Verification
 
-I required the assistant to run checks rather than describe them. As of 2026-08-25, in the working tree based on `607fc8c`: `dotnet build -c Release` gives 0 warnings and 0 errors, `dotnet test -c Release` gives 104 passed / 0 failed / 0 skipped, and `dotnet format --verify-no-changes` is clean. The five mutation experiments above were each reverted and re-verified against the preceding 101-test baseline.
+I required the assistant to run checks rather than describe them. As of 2026-08-25, in the working tree based on `730ba32`: `dotnet build -c Release` gives 0 warnings and 0 errors, `dotnet test -c Release` gives 112 passed / 0 failed / 0 skipped, and `dotnet format --verify-no-changes` is clean. The five mutation experiments above were each reverted and re-verified against the preceding 101-test baseline.
 
 An earlier milestone taught this the hard way: generated files carried CRLF endings against an `.editorconfig` requiring LF. Build and tests both passed and the formatting gate still failed. A successful compile is not a complete verification result, so every declared gate gets run.
 
@@ -89,6 +89,6 @@ It could assist with retrieval, ranking, candidate fact extraction, or explanati
 
 ## Where AI helped most, and least
 
-Most: mechanical breadth. 104 tests and four documents inside a sensible window would not have happened by hand, and the edge-case coverage is directly attributable to that speed.
+Most: mechanical breadth. 112 tests and four documents inside a sensible window would not have happened by hand, and the edge-case coverage is directly attributable to that speed.
 
 Least: judgment about what is actually true. The over-engineered HTTP boundary and the proposed replay example share a shape with every correction in the table above. Each was locally plausible, internally consistent, and globally wrong, visible only to someone who already knew what the system was supposed to mean. That is an argument for this architecture rather than against the tool: the parts that decide things are small, deterministic, and readable in one sitting, because that is the part a reviewer, an auditor, and I all have to check by hand.
