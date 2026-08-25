@@ -5,6 +5,8 @@ namespace RegulatedAIWorkflow.Tests.Api;
 
 internal static class ApiTestRequest
 {
+    internal const string DefaultIdempotencyKey = "4d473050-9f9a-4dd7-84c3-6e681efcd55d";
+
     internal const string WorkflowBody = """
         {
           "vendorId": "silverline-payments",
@@ -26,7 +28,8 @@ internal static class ApiTestRequest
         string body,
         string? tenantId = "northstar-bank",
         string? userId = "procurement-user",
-        string? role = "ProcurementManager")
+        string? role = "ProcurementManager",
+        string? idempotencyKey = DefaultIdempotencyKey)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
@@ -36,6 +39,11 @@ internal static class ApiTestRequest
         AddHeader(request, "X-Tenant-Id", tenantId);
         AddHeader(request, "X-User-Id", userId);
         AddHeader(request, "X-User-Role", role);
+        if (string.Equals(path, "/workflows/run", StringComparison.Ordinal))
+        {
+            AddHeader(request, "Idempotency-Key", idempotencyKey);
+        }
+
         return request;
     }
 

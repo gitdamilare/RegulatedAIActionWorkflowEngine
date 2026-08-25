@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RegulatedAIWorkflow.Api.Endpoints;
+using RegulatedAIWorkflow.Api.Idempotency;
 using RegulatedAIWorkflow.Core.Application;
 using RegulatedAIWorkflow.Core.Application.Approval;
 using RegulatedAIWorkflow.Core.Application.Workflow;
@@ -14,6 +15,7 @@ using RegulatedAIWorkflow.Infrastructure.Execution;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddProblemDetails();
+builder.Services.AddDistributedMemoryCache();
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = false);
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -43,7 +45,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }))
     .WithName("Health");
 
 app.MapPost("/workflows/run", WorkflowEndpoint.RunAsync)
-    .WithName("RunWorkflow");
+    .WithName("RunWorkflow")
+    .AddEndpointFilter<IdempotencyFilter>();
 
 app.MapPost("/approvals", ApprovalEndpoint.RecordAsync)
     .WithName("IssueApproval");

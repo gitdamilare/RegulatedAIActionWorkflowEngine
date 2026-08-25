@@ -6,6 +6,8 @@
 @vendorId = silverline-payments
 @tenantAOnlyVendorId = lakeshore-analytics
 @requestedAction = markVendorApproved
+@assessmentKey = e0d5a7a7-e1aa-493d-b43c-856375f59e31
+@executionKey = 22cb25a3-d757-4361-884c-53db8b7d5bbe
 
 ### Static liveness
 GET {{baseUrl}}/health
@@ -19,6 +21,7 @@ Accept: application/json
 X-Tenant-Id: {{tenantId}}
 X-User-Id: {{requesterUserId}}
 X-User-Role: ProcurementManager
+Idempotency-Key: {{assessmentKey}}
 
 {
   "vendorId": "{{vendorId}}",
@@ -53,6 +56,24 @@ Accept: application/json
 X-Tenant-Id: {{tenantId}}
 X-User-Id: {{requesterUserId}}
 X-User-Role: ProcurementManager
+Idempotency-Key: {{executionKey}}
+
+{
+  "vendorId": "{{vendorId}}",
+  "requestedAction": "{{requestedAction}}",
+  "approvalId": "{{issueApproval.response.body.$.approvalId}}"
+}
+
+### 4. Replay the identical execution request within 60 minutes
+# Expect: the exact response from step 3, including the same workflowId and auditEventIds.
+# No second executor invocation or audit event is produced for this sequential retry.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+Accept: application/json
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{requesterUserId}}
+X-User-Role: ProcurementManager
+Idempotency-Key: {{executionKey}}
 
 {
   "vendorId": "{{vendorId}}",
@@ -64,7 +85,7 @@ X-User-Role: ProcurementManager
 # Cross-tenant isolation
 ###############################################################################
 
-### 4. Tenant B cannot retrieve evidence for a vendor that exists only in Tenant A
+### 5. Tenant B cannot retrieve evidence for a vendor that exists only in Tenant A
 # lakeshore-analytics belongs to northstar-bank, but this request is made as
 # harborview-bank. Expect: 200 OK, riskLevel unknown, requiresApproval false,
 # actionStatus denied_unknown_subject, recommendation "No such subject in this
@@ -77,6 +98,7 @@ Accept: application/json
 X-Tenant-Id: {{otherTenantId}}
 X-User-Id: {{requesterUserId}}
 X-User-Role: ProcurementManager
+Idempotency-Key: 0ac3a89a-2bb2-4536-adfc-e6cca29e7f3f
 
 {
   "vendorId": "{{tenantAOnlyVendorId}}",
@@ -88,7 +110,7 @@ X-User-Role: ProcurementManager
 # Focused refusal examples
 ###############################################################################
 
-### 5. A Viewer cannot attempt the regulated action
+### 6. A Viewer cannot attempt the regulated action
 # Expect: 403 Forbidden, blocked_unauthorized, unknown risk, and no evidence-derived data.
 POST {{baseUrl}}/workflows/run
 Content-Type: application/json
@@ -96,13 +118,14 @@ Accept: application/json
 X-Tenant-Id: {{tenantId}}
 X-User-Id: viewer-user
 X-User-Role: Viewer
+Idempotency-Key: f22145e1-0b22-4e79-b379-3020e4b6606a
 
 {
   "vendorId": "{{vendorId}}",
   "requestedAction": "{{requestedAction}}"
 }
 
-### 6. A ProcurementManager cannot record approval
+### 7. A ProcurementManager cannot record approval
 # Expect: 403 Forbidden with Problem Details.
 POST {{baseUrl}}/approvals
 Content-Type: application/json
@@ -116,11 +139,12 @@ X-User-Role: ProcurementManager
   "requestedAction": "{{requestedAction}}"
 }
 
-### 7. Protected endpoints require asserted identity headers
+### 8. Protected endpoints require asserted identity headers
 # Expect: 401 Unauthorized with Problem Details.
 POST {{baseUrl}}/workflows/run
 Content-Type: application/json
 Accept: application/json
+Idempotency-Key: d346cdd0-748a-44d0-b572-c05bd3a607f5
 
 {
   "vendorId": "{{vendorId}}",
