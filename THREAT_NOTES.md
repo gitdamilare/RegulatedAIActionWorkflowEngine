@@ -1,215 +1,100 @@
 # Threat Notes
 
-This threat model describes the code in this repository, not an intended future platform. The current service is a single-process prototype with caller-asserted identity, seeded in-memory data, unsigned approvals, a process-local audit queue, and a mock executor.
+The protected assets are tenant evidence, normalized facts, approvals, risk decisions, audit records, and regulated effects. The prototype trusts Core code, seeded facts, the server clock, and process composition; it does not trust HTTP input, evidence prose, or repository output to remain correctly scoped. It does not defend against a process owner, a hostile deployment operator, or multi-instance races.
 
-> Controls described as **production mitigation** are recommendations only. They are not implemented here.
+*Controls listed under production mitigation are recommendations. None of them are implemented here.*
 
-## Assets and trust assumptions
+The three risks below are grouped by root cause rather than by attack surface, so each one names a distinct thing that would have to be fixed.
 
-The assets that matter are:
+## 1. Asserted authorization: cross-tenant access and self-approval
 
-- Confidential tenant and vendor evidence.
-- Integrity and provenance of typed facts and citations.
-- Integrity of the deterministic risk policy and its selected version.
-- Approver identity, authority, and separation from the requester.
-- The regulated action and evidence that it did or did not happen.
-- Audit completeness, ordering, confidentiality, and retention.
+Root cause: identity is shape-checked, never authenticated. Both branches follow from that one fact.
 
-The prototype trusts its composition root, Core code, seeded typed facts, server clock, and in-process adapters. It does not trust HTTP input, external document prose, or repository output to remain correctly scoped. It does not defend against a process owner, memory compromise, forged identity headers, a hostile deployment operator, or multi-instance races.
+### Attack
 
-## 1. Forged identity, confused deputy, and cross-tenant access
-
-### Attack path
-
-1. A caller chooses another tenant ID, user ID, or privileged role in the three prototype headers.
-2. Alternatively, a future repository, cache, search index, export, or administrative path omits tenant scope.
-3. The service retrieves another customer's evidence, accepts a foreign approval, or invokes an action in the wrong scope.
-4. An over-privileged service identity could also act as a confused deputy if it replaces rather than carries the human caller's authority.
+A caller asserts another tenant, user, or privileged role through prototype headers and reads another customer's evidence, or a future repository, cache, or export omits tenant scope. The same forgeable identity also lets a requester impersonate an approver, self-approve, invent or reuse an approval for another tenant, vendor, or action, or present one after the evidence or policy it was issued against has changed.
 
 ### Implemented controls
 
-- The API requires exactly one bounded tenant, user, and recognized role header and binds them once into a Core principal.
-- Action authorization is deny-by-default and occurs before any evidence retrieval.
-- Evidence queries include both tenant and vendor.
-- Core independently checks every returned document and fact, rejects foreign and orphaned items, and treats duplicate document IDs as a scope violation.
-- Approval lookup is tenant-scoped, and Core rechecks the returned tenant and approval ID.
-- A subject visible only in another tenant is returned as the same unknown-subject result as a genuinely absent subject.
-- Tests prove unauthorized callers retrieve nothing and leaky evidence or approval adapters fail closed.
+- The API requires one bounded tenant, user, and recognized role value, bound once into a Core principal.
+- Authorization is deny-by-default and runs before evidence retrieval.
+- Queries include tenant and vendor; Core independently rejects foreign, orphaned, or duplicate evidence.
+- Cross-tenant-only and unknown subjects return indistinguishable denials, so there is no existence oracle.
+- Only the server-owned `RiskApprover` role can issue an approval, and approver identity comes from the principal rather than the request body.
+- The server binds ten fields: approval ID, tenant, vendor, action, approver identity, approver role, evidence hash, policy version, issue time, and expiry.
+- Use-time checks reject missing, foreign, mismatched, superseded, future, expired, self, and wrong-role records, and rejected approvals never reach the executor.
+- Approval never lowers the risk assessment or removes missing evidence.
 
 ### Residual risk
 
-Header validation is not authentication. A caller that can reach the prototype can assert `RiskApprover`, another user ID, or another tenant. In-memory filtering protects correctly asserted tenants; it does not prove that the caller belongs to the asserted tenant.
+Header validation is not authentication: a reachable caller can assert any tenant or role, including `RiskApprover`. Approval records are unsigned and process-local, and a matching approval is reusable until expiry with no pending request, revocation, single-use consumption, or live entitlement check. No production datastore, cache, index, export, backup, or support path is exercised.
 
-The repository has no shared cache, vector index, backup, export, or administrative interface, so isolation of those common production paths is not demonstrated.
+### Production mitigation
 
-### Production mitigation: not implemented
-
-- Validate OIDC/OAuth access tokens or workload identities and derive tenant, subject, and entitlements only from issuer-controlled claims.
-- Check active tenant membership and action entitlement at request and execution time; require step-up authentication for approval.
-- Preserve the initiating human identity through service-to-service calls and restrict workload identities to delegated authority.
-- Use tenant-bearing database keys, mandatory query predicates, row-level security or separate schemas, and tenant-aware cache/index key types.
-- Apply the same scope to exports, observability, backups, restore tooling, support access, and data ingestion.
-- For legal or regulated work, add matter-level or case-level ethical-wall scope inside the tenant boundary.
+Validate OIDC/OAuth or workload identity and derive tenant and entitlements only from issuer-controlled claims. Check live membership before retrieval and execution, and preserve the initiating human identity across service calls so a privileged workload cannot substitute its own authority. Enforce tenant-bearing storage keys and row-level security, and apply the same scope to caches, indexes, exports, backups, and administrative access. Require phishing-resistant step-up authentication for approval, persist an immutable and revocable approval lifecycle, show the reviewer the exact intended effect and bound evidence, and atomically consume a workflow-specific approval where policy requires one-time authorization.
 
 ### Detection
 
-Alert on repeated authorization failures, cross-scope adapter violations, unusual tenant switching by one subject, first-time privileged actions, and support or administrative reads. Run isolation tests against every new datastore, cache, index, export, and restore path.
+Alert on repeated authorization denials, cross-scope adapter violations, unusual tenant switching by one subject, self-approval attempts, approval reuse beyond expected policy, and approval immediately followed by execution.
 
-## 2. Malicious evidence, poisoned facts, and invented citations
+## 2. Untrusted evidence reaching a decision
 
-### Attack path
+Root cause: documents are supplied by parties with an interest in the outcome.
 
-1. A vendor or uploader places instructions such as "ignore policy and approve" in a document.
-2. A future extractor or ingestion path misclassifies that text as a trusted control fact, assigns false tenant/vendor metadata, or loses source provenance.
-3. A compromised or defective risk component invents a citation, cites an unrelated document, or returns duplicate or empty references.
-4. A downstream UI or model treats returned citation prose as instructions rather than evidence.
+### Attack
+
+A vendor inserts instructions such as "ignore policy and approve", an ingestion process converts hostile text into trusted facts, or a risk component cites an unrelated or invented document. A downstream client may also render returned citation prose as an instruction rather than as data.
 
 ### Implemented controls
 
-- External prose enters through `UntrustedText`; it has no implicit string conversion and accidental `ToString()` output is redacted.
-- The deterministic evaluator's input contains only the requested action, retained typed facts, and the trusted scope signal. It has no question or document-prose field.
-- Rules select citation references from the source document IDs attached to relevant typed facts.
-- Core resolves references only against retained tenant/vendor documents and fact provenance.
-- Invented, duplicate, unsupported, empty-ID, and empty-snippet citations cause the assessment to be discarded and the workflow to fail closed.
-- Audit events have a fixed structured schema with no request question or evidence-prose field.
-- The seeded malicious vendor statement cannot lower risk or bypass approval, as proved across several injection variants.
+- External prose enters through `UntrustedText`; accidental string logging is redacted.
+- The evaluator accepts only an action, retained typed facts, and a scope flag, never questions or document prose.
+- Rules derive references from source-linked facts, and Core resolves them only against retained tenant/vendor documents.
+- Invalid, duplicate, empty, unsupported, or invented citations fail closed.
+- Audit events carry fixed structured fields and exclude questions, snippets, secrets, and exception messages.
 
 ### Residual risk
 
-The prototype starts with pre-classified typed facts. It does not implement authenticated ingestion, document-type validation, OCR, extraction, fact review, or provenance signing. If an attacker can change those facts or trusted metadata, the prose-free evaluator will deterministically process poisoned data.
+Seeded typed facts are trusted prototype data. There is no authenticated ingestion, extraction review, confidence model, or document-version workflow, so an attacker who can change those facts gets a deterministic evaluation of poisoned input. `ForDisplay()` bounds length and control characters but is not a semantic filter, and nothing guarantees that a client renders returned snippets as inert text.
 
-`UntrustedText.ForDisplay()` replaces control characters and caps length, but it is not a semantic safety filter. A verified citation is safe as provenance, not automatically safe as an instruction to a human, browser, or later model. There is no injection scanner or quarantine feature.
+### Production mitigation
 
-### Production mitigation: not implemented
-
-- Authorize ingestion separately and derive tenant, vendor, document type, and source metadata from controlled systems rather than uploader assertions.
-- Store immutable document versions, cryptographic content hashes, lineage, extractor/model version, reviewer decisions, and confidence.
-- Treat extracted facts and model output as untrusted proposals; validate schemas and domain constraints and require human review for material facts.
-- Bind every accepted fact to a retained source span and display citations as escaped text, never executable HTML or a control message.
-- Evaluate extraction changes on a versioned corpus, red-team indirect injection, and retain the prior version for rollback.
-- Separate retrieval/extraction from deterministic policy and action authorization so model output cannot grant permission.
+Authorize ingestion separately and derive scope metadata from controlled systems rather than uploader assertions. Preserve immutable document versions, content hashes, and source spans; treat extracted facts as schema-validated proposals requiring human review for material facts; record extractor and model versions; and escape citations as data in every downstream client.
 
 ### Detection
 
-Track fact overrides, unsupported citations, scope violations, extraction-version drift, changes in missing-evidence rates, and discrepancies between human review and extraction. Alert on sudden reductions in risk or approval requirements after an ingestion or policy change.
+Track unsupported citations, scope violations, extraction-version drift, and changes in missing-evidence rates. Alert on any sudden fall in risk level or approval demand following an ingestion or policy change.
 
-## 3. Forged, stale, mismatched, replayed, or self approval
+## 3. Unrecorded or duplicated regulated action
 
-### Attack path
+Root cause: the audit record and the effect are separate non-durable operations.
 
-1. A requester supplies an invented approval ID or reuses an approval issued for another tenant, vendor, or action.
-2. Evidence or policy changes after approval, but the caller tries to use the stale decision.
-3. The requester impersonates an approver, approves their own action, or uses a record created by an insufficient role.
-4. A valid matching approval is reused more times or for longer than the reviewer intended.
-5. A process or storage compromise inserts or alters an approval record directly.
+### Attack
+
+An operator or compromised process deletes or rewrites events to hide an attempt, or a restart erases the trail. Separately, a client retry, two concurrent requests, or a crash between the effect and the cache write duplicates an irreversible action or leaves an authorized attempt with no terminal outcome.
 
 ### Implemented controls
 
-- Approval issuance permits only the server-owned `RiskApprover` role.
-- Approver identity and role come from the bound principal, not the approval JSON body.
-- The server computes an order-independent SHA-256 binding over tenant, vendor, policy version, scoped document IDs/types/content fingerprints, and source-linked facts.
-- The stored record also carries action, issue time, expiry, approver identity, and approver role.
-- At use time, Core re-evaluates current evidence and policy and rejects missing, unknown, foreign, wrong-action, wrong-vendor, superseded-policy, superseded-evidence, not-yet-valid, expired, self, and wrong-role approvals.
-- Rejected approvals do not invoke the executor and receive structured rejection audit codes.
-- Approval changes execution guidance but never lowers the risk result or removes its evidence gaps.
-
-### Residual risk
-
-The approver headers are forgeable, records are unsigned and in memory, and anything controlling the process can insert or modify them. The evidence hash detects a mismatch during normal gate evaluation; it does not authenticate the human or make the record immutable.
-
-Approval is scope authorization, not approval of a specific blocked workflow. A matching record is reusable until expiry and cannot be revoked or atomically consumed. There is no pending request lifecycle, notification, reviewer evidence screen, or execution-time check against an external entitlement source.
-
-### Production mitigation: not implemented
-
-- Authenticate the approver and require phishing-resistant step-up authentication for high-impact approval.
-- Persist an immutable approval record with trusted issuer, assurance level, reason, evidence/policy binding, expiry, revocation state, and live execution-time entitlement check.
-- If case-specific approval is required, create an opaque `approvalRequestId`, show the exact evidence and intended effect to the reviewer, and consume the approval atomically.
-- Cryptographically sign or seal approval records where the threat model requires proof independent of the application database.
-- Add revocation, emergency suspension, dual control for exceptional actions, and explicit maximum use count.
-
-### Detection
-
-Alert on self-approval attempts, mismatches, supersession, expired use, unusual approval volume, approval immediately followed by execution, reuse beyond expected policy, and changes to approval records outside the application path.
-
-## 4. Duplicate execution and partial-failure windows
-
-### Attack path
-
-1. A client times out and retries a valid request.
-2. Two equivalent requests arrive concurrently at one or more service instances.
-3. Both pass authorization and approval and call the downstream system.
-4. A crash occurs after the authorization audit but before the effect, or after the effect but before the execution/completion audit.
-5. Recovery cannot tell whether retrying will miss or duplicate the real action.
-
-### Implemented controls
-
-- Every path blocked by validation, authorization, evidence, or approval avoids the executor.
-- An `AuthorizedForExecution` event is written before invocation, and a successful execution event is written afterward.
-- An executor result of `Succeeded: false` contractually means no regulated effect occurred and is audited as `BlockedExecutionUnavailable`.
-- An executor call that ends without a definitive result is audited as `ExecutionOutcomeUnknown` and propagated for reconciliation rather than presented as a clean failure.
-- In-memory adapters use thread-safe collections, so concurrent writes do not corrupt their collections.
-- Exceptions and cancellation are audited and propagated rather than converted into a successful business result.
-- `/workflows/run` requires one GUID `Idempotency-Key`; the API hashes its tenant/action/vendor scope and complete request identity.
-- A matching executed response is replayed for 60 minutes, while changed input returns 409 and blocked or failed responses remain retryable.
-- The raw key is absent from workflow responses and structured Core audit events.
-
-### Residual risk
-
-The endpoint filter has no atomic claim, uniqueness constraint, distributed lock, durable execution state, transaction, outbox, inbox, or downstream idempotency token. Its cache read and write are separate, so simultaneous valid requests can both produce mock invocations. Direct Core calls bypass it, a restart loses every entry, and expiry permits the same operation to execute again after 60 minutes. Cached replays also create no separate Core audit event.
-
-Audit-before-effect ordering and sequential response replay improve traceability and ordinary retry behavior, but neither is atomicity. A cache-write failure or crash after the effect reopens duplicate execution; a crash before the effect can leave an authorized attempt with no outcome. The trail marks an observed unknown-outcome window explicitly, but the included executor still records only a local mock success and no real irreversible integration is exercised. Production still requires the outbox, atomic durable operation claim, stable downstream token, and reconciliation design below.
-
-### Production mitigation: not implemented
-
-- Preserve the bounded client idempotency contract and scope it unambiguously by authenticated tenant, action, vendor, and operation semantics.
-- Atomically claim that key in durable storage with a unique constraint and store the request fingerprint, execution state, and final response.
-- Coordinate concurrent callers on the same durable operation and never use a check-then-act dictionary pattern.
-- Commit business intent, authorization evidence, and an outbox record in one local transaction.
-- Pass a stable idempotency token to the downstream system when supported; otherwise use a state machine and reconciliation before retrying unknown outcomes.
-- Classify retryable failures, use bounded backoff, and prevent failed or abandoned claims from blocking recovery forever.
-
-### Detection
-
-Measure duplicate-key conflicts, concurrent claims, retry counts, unknown outcomes, reconciliation age, and downstream duplicate responses. Alert on authorization events without a terminal state and effects without a matching durable operation.
-
-## 5. Audit tampering and accidental disclosure
-
-### Attack path
-
-1. An operator or compromised process deletes or rewrites events to hide an unauthorized attempt.
-2. A restart erases process-local audit history.
-3. Raw questions, document content, access tokens, secrets, or exception messages are written to logs or traces.
-4. An audit-read interface leaks another tenant's vendor, staff, or decision metadata.
-5. Retention or deletion jobs remove evidence needed to explain a regulated action.
-
-### Implemented controls
-
-- The audit contract contains fixed identifiers, enums, reason codes, missing-evidence codes, policy version, and approval metadata rather than arbitrary messages.
-- It has no field for raw request questions, evidence prose, exception messages, or idempotency values.
-- Audit writes use `CancellationToken.None` after workflow processing starts so request cancellation does not deliberately suppress the attempt record.
-- Event IDs are returned only after the sink reports a successful write.
-- Tests prove required ordering, timestamps, returned IDs, failure propagation, and absence of hostile prose and secret-like values.
+- The authorization event is written before the executor is invoked, so a failing sink prevents the effect.
+- `AuditEvent` has seventeen structured fields and no free-text field, which is why request prose, evidence prose, exception messages, and idempotency secrets cannot leak into the trail.
+- Audit writes pass `CancellationToken.None`, so a cancelled request still records its outcome, and event IDs are returned only after the sink confirms a write.
+- The executor contract separates three outcomes: the effect occurred, no effect occurred (retryable `503`), or the outcome is unknown and must be reconciled.
+- `POST /workflows/run` requires one GUID `Idempotency-Key`; a matching executed response replays for 60 minutes, changed input returns `409`, and blocked or failed responses stay retryable.
+- The raw key never enters a workflow response or a Core audit event.
 - There is no public audit-read endpoint.
 
 ### Residual risk
 
-`InMemoryAuditSink` is a `ConcurrentQueue`, not durable or immutable storage. It has no hash chain, external anchor, signature, sequence guarantee across instances, access policy, retention lock, backup, or restore procedure. A process crash loses the trail, and a privileged process owner can replace the implementation or suppress writes.
+`InMemoryAuditSink` is a `ConcurrentQueue`: not durable, immutable, hash-chained, signed, or externally anchored, and a privileged process can suppress or rewrite it. The idempotency cache is process-local and its read and write are separate operations, so simultaneous requests can both execute; restart and expiry lose replay state, and direct Core calls bypass the filter entirely. Audit-before-effect ordering improves traceability but is not atomicity.
 
-Structured identifiers may still be personal or confidential metadata. The absence of a public read route does not provide operational search, access review, retention, or incident response.
+### Production mitigation
 
-### Production mitigation: not implemented
-
-- Write append-only structured events to access-controlled durable storage with tenant-aware read authorization.
-- Add monotonic sequence or hash-chain verification, sign or externally anchor chain heads, and use immutable/WORM retention locks where required.
-- Keep raw content in separately governed stores and place only minimal identifiers, hashes, and fixed codes in audit and telemetry.
-- Encrypt transport, storage, backups, and exports; manage keys outside the application process.
-- Define retention, legal hold, lawful deletion, reviewer access, export, and evidence-preservation rules with legal and security owners.
-- Monitor the audit pipeline independently and fail closed or enter a controlled degraded mode when mandatory audit persistence is unavailable.
+Write mandatory events to append-only access-controlled storage with monotonic sequencing, hash links or signatures, externally anchored checkpoints, retention locks, and independent integrity monitoring; fail execution closed when audit persistence is unavailable. For the effect itself, claim the operation atomically in durable storage with a unique constraint and request fingerprint, commit intent and an outbox record in one local transaction, pass a stable idempotency token downstream, and reconcile unknown outcomes before retrying. Do not claim exactly-once execution.
 
 ### Detection
 
-Alert on sequence gaps, chain or signature failures, sink unavailability, unusual audit access, retention-policy changes, missing terminal events, and any detection of tokens or raw evidence in logs. Regularly reconcile audit events against durable workflow and downstream records.
+Alert on audit sequence gaps, integrity or signature failures, sink unavailability, authorization events with no terminal state, duplicate idempotency claims, and reconciliation age.
 
 ## Threat-model boundary
 
-This prototype proves that ordinary application code can keep untrusted prose outside deterministic policy and place authorization, scope, approval, citation, and audit gates before a side effect. It does not prove that the surrounding identity, ingestion, storage, deployment, or operational environment is trustworthy. Those systems must preserve the same boundaries for the application-level controls to remain meaningful.
+The prototype demonstrates that ordinary application code can keep untrusted prose outside deterministic policy and place authorization, scope, approval, citation, and audit gates before a side effect. It does not demonstrate that the surrounding identity, ingestion, storage, deployment, and operational environment is trustworthy, and those systems must preserve the same boundaries for these controls to remain meaningful. Deeper failure and idempotency detail is retained in the [technical appendix](docs/TECHNICAL_APPENDIX.md).

@@ -2,21 +2,15 @@
 
 ## What the leveler levels, and what it doesn't
 
-AI is a leveler. It collapsed the time it took me to reach the working vocabulary of regulated vendor onboarding: what a control attestation is, why separation of duties is stated the way it is, what an auditor expects a trail to prove. Days of reading became an afternoon of asking. It did the same for planning and architecture, where the useful output was not code but a fast, arguable second opinion on where this problem's trust boundaries actually sit.
+AI is a leveler. It collapsed the time it took me to reach the working vocabulary of regulated vendor onboarding: what a control attestation is, why separation of duties is stated the way it is, what an auditor expects a trail to prove. Days of reading became an afternoon of asking. It did the same for planning and architecture, where the useful output was not just code but a fast, arguable second opinion on where this problem's trust boundaries actually sit.
 
 What it does not level is which of those controls are load-bearing *here*, and whether a given piece of generated code is true. That judgment is the job. The rest of this document is the evidence of where I applied it: what I refused to delegate, where the AI was confidently wrong, and how I checked that the tests defending this system actually work rather than merely pass.
 
 ## Disclosure
 
-**Tool:** OpenAI Codex, used as a coding and documentation assistant throughout the incremental build. It inspected source and Git state, proposed scoped C# changes, drafted tests and documentation, argued security trade-offs, and ran the verification commands.
-
-**Model version.** Codex Sol 5.6. The closing section of this file requires a runtime model's provider and version to be documented, and the same standard should apply to development assistance, so it is named here rather than left implicit. One qualification, stated rather than omitted: the version is recorded from my own account of the sessions, not from a per-session log written at the time, so it identifies the model used without attributing a specific change to a specific session. The corroborating record is the source, the Git history, per-commit implementation notes, and verification anyone can re-run. Tool and model version are captured per session from this milestone forward.
-
-**Data handling.** What was sent to the provider: this repository's source and tests, the assignment brief, and synthetic fixture data. What was not sent: client or counterparty data, material non-public information, production credentials, or any real vendor record. Every tenant, vendor, and document in the fixtures is invented. I have not independently verified the provider's retention or training posture for the account used, and I am stating that as unverified rather than leaving it out.
-
-**Runtime boundary.** AI assistance during development is separate from what the application does. There is no model call, agent, prompt template, embedding service, or probabilistic decision path in the running system. Risk is deterministic C# over a server-selected action and source-linked typed facts; authorization, citation verification, approval, audit, and execution are ordinary application code.
-
-**Authority.** AI was not authorized to stage, commit, rewrite history, push, or publish. Codex could edit and verify the working tree; I decided what became history. This record does not claim that every accepted line was manually authored or independently retyped. Human control means review, decisions, corrections, and ownership of the result, not the absence of AI-generated drafts.
+- **Tool:** OpenAI Codex, recorded as Codex Sol 5.6, used for planning, scoped C# drafts, tests, documentation, repository inspection, and verification.
+- **Runtime:** The application contains no model call, prompt template, embedding service, or probabilistic decision path. Runtime policy is deterministic C# over server-selected actions and typed facts.
+- **Authority:** AI could edit and verify the working tree but was not authorized to stage, commit, push, publish, or decide which changes entered history.
 
 ## What I did not delegate
 
