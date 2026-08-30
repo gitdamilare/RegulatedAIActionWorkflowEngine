@@ -1,7 +1,7 @@
 using System.Reflection;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 
-namespace RegulatedAIWorkflow.Tests.Domain.Evidence;
+namespace RegulatedAIWorkflow.Tests;
 
 /// <summary>
 /// Verifies the construction and safe-handling behavior of <see cref="UntrustedText"/>.
