@@ -13,6 +13,6 @@ internal sealed class MissingSoc2Rule : IRiskRule
                 RiskLevel.High,
                 new RiskReason("SOC2_MISSING", "No current SOC 2 evidence was found."),
                 new MissingEvidenceItem("SOC2_REPORT", "Current SOC 2 report"),
-                EvidenceFactType.SecurityEvidenceRequired)
+                [])
             : null;
 }

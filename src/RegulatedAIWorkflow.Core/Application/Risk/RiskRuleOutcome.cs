@@ -4,12 +4,11 @@ using RegulatedAIWorkflow.Core.Domain.Risk;
 namespace RegulatedAIWorkflow.Core.Application.Risk;
 
 /// <summary>
-/// Describes the structured contribution made by one firing policy rule.
+/// The structured contribution of one firing rule. <c>MissingEvidence</c> is nullable because not every
+/// finding is a gap: a rule may establish that a decision is regulated without naming anything absent.
 /// </summary>
 internal sealed record RiskRuleOutcome(
     RiskLevel RiskLevel,
     RiskReason Reason,
-    MissingEvidenceItem MissingEvidence,
-    EvidenceFactType? CitationSourceFactType,
-    bool EvidenceIsAmbiguous = false,
-    bool IsTerminal = false);
+    MissingEvidenceItem? MissingEvidence,
+    IReadOnlyList<EvidenceFactType> CitedFactTypes);

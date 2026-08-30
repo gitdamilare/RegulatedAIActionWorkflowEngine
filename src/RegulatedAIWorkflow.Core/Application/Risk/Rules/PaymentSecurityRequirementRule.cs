@@ -3,7 +3,11 @@ using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Core.Application.Risk.Rules;
 
-/// <summary>Fails closed when payment processing lacks an applicable security requirement.</summary>
+/// <summary>
+/// Fails closed when payment data is processed but no applicable security requirement was established.
+/// An unknown requirement raises risk; it never lowers it. Nothing is cited, because the absence of a
+/// policy document is precisely what there is no document for.
+/// </summary>
 internal sealed class PaymentSecurityRequirementRule : IRiskRule
 {
     public RiskRuleOutcome? Evaluate(RiskRuleContext context) =>
@@ -12,13 +16,11 @@ internal sealed class PaymentSecurityRequirementRule : IRiskRule
             ? new RiskRuleOutcome(
                 RiskLevel.High,
                 new RiskReason(
-                    "EVIDENCE_AMBIGUOUS",
-                    "The applicable payment-data security requirement is unknown."),
+                    "SECURITY_REQUIREMENT_UNKNOWN",
+                    "The applicable payment-data security requirement could not be established."),
                 new MissingEvidenceItem(
-                    "TRUSTWORTHY_EVIDENCE",
-                    "Trustworthy tenant-scoped evidence"),
-                CitationSourceFactType: null,
-                EvidenceIsAmbiguous: true,
-                IsTerminal: true)
+                    "APPLICABLE_SECURITY_POLICY",
+                    "Applicable payment-data security policy"),
+                [])
             : null;
 }

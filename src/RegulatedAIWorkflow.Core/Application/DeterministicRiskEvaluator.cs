@@ -1,33 +1,31 @@
 using RegulatedAIWorkflow.Core.Application.Risk;
+using RegulatedAIWorkflow.Core.Application.Risk.Rules;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Core.Application;
 
 /// <summary>
-/// Provides a deterministic risk evaluation engine that applies a stable ordered rule set to an evaluation request.
+/// Server-owned risk policy. Reads only typed facts, so no evidence prose can reach a rule condition.
+/// Effective risk is the maximum of the action baseline and every rule that fires; a rule can raise the
+/// level but never lower it, and no rule short-circuits the rest.
 /// </summary>
 public sealed class DeterministicRiskEvaluator : IRiskEvaluator
 {
-    private readonly RiskPolicyDefinition policy;
-
     /// <summary>
-    /// Initializes a new instance of the <see cref="DeterministicRiskEvaluator"/> class with the current selected policy.
+    /// The policy, in evaluation order. That order is also citation order, so the facts that make a
+    /// decision regulated are named before the gaps found within it. Adding a condition is one new rule
+    /// class and one line here.
     /// </summary>
-    public DeterministicRiskEvaluator()
-        : this(RiskPolicies.Current)
-    {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DeterministicRiskEvaluator"/> class with the specified policy.
-    /// </summary>
-    /// <param name="policy">The risk policy definition to use.</param>
-    internal DeterministicRiskEvaluator(RiskPolicyDefinition policy)
-    {
-        ArgumentNullException.ThrowIfNull(policy);
-        this.policy = policy;
-    }
+    private static readonly IRiskRule[] Rules =
+    [
+        new PaymentDataScopeRule(),
+        new SensitiveDataScopeRule(),
+        new PaymentSecurityRequirementRule(),
+        new MissingSoc2Rule(),
+        new MissingRetentionScheduleRule(),
+        new MissingBreachNotificationRule()
+    ];
 
     /// <inheritdoc />
     public RiskEvaluation EvaluateRisk(RiskEvaluationInput input)
@@ -35,74 +33,30 @@ public sealed class DeterministicRiskEvaluator : IRiskEvaluator
         ArgumentNullException.ThrowIfNull(input);
 
         var actionPolicy = WorkflowActionPolicies.GetRequired(input.RequestedAction);
-        var context = new RiskRuleContext(input);
-        var outcomes = new List<RiskRuleOutcome>();
+        var context = new RiskRuleContext(input.Facts);
 
-        foreach (var rule in policy.Rules)
-        {
-            var outcome = rule.Evaluate(context);
-            if (outcome is null)
-            {
-                continue;
-            }
+        var outcomes = Rules
+            .Select(rule => rule.Evaluate(context))
+            .OfType<RiskRuleOutcome>()
+            .ToArray();
 
-            outcomes.Add(outcome);
-            if (outcome.IsTerminal)
-            {
-                return CreateEvaluation(
-                    context,
-                    actionPolicy,
-                    outcomes,
-                    EffectiveRiskLevel(context, actionPolicy, outcomes));
-            }
-        }
+        var level = outcomes.Aggregate(
+            actionPolicy.BaselineRiskLevel,
+            (highest, outcome) => Maximum(highest, outcome.RiskLevel));
 
-        return CreateEvaluation(
-            context,
-            actionPolicy,
-            outcomes,
-            EffectiveRiskLevel(context, actionPolicy, outcomes));
+        return new RiskEvaluation(
+            level,
+            RecommendationFor(level),
+            [actionPolicy.BaselineRiskReason, .. outcomes.Select(outcome => outcome.Reason)],
+            [.. outcomes.Select(outcome => outcome.MissingEvidence).OfType<MissingEvidenceItem>()],
+            context.SourceDocumentIdsFor(outcomes.SelectMany(outcome => outcome.CitedFactTypes)),
+            RequiresApproval: level is RiskLevel.High);
     }
-
-    private RiskEvaluation CreateEvaluation(
-        RiskRuleContext context,
-        WorkflowActionPolicy actionPolicy,
-        IReadOnlyList<RiskRuleOutcome> outcomes,
-        RiskLevel riskLevel) =>
-        new(
-            riskLevel,
-            RecommendationFor(riskLevel),
-            ActionAndRuleReasons(actionPolicy, outcomes),
-            RiskCitationReferenceBuilder.Build(context.Facts, outcomes),
-            outcomes.Select(outcome => outcome.MissingEvidence).ToArray(),
-            RequiresApproval: riskLevel is RiskLevel.High,
-            EvidenceIsAmbiguous: outcomes.Any(outcome => outcome.EvidenceIsAmbiguous),
-            policy.Version);
-
-    private static RiskReason[] ActionAndRuleReasons(
-        WorkflowActionPolicy actionPolicy,
-        IReadOnlyList<RiskRuleOutcome> outcomes) =>
-        actionPolicy.BaselineRiskLevel is RiskLevel.Low
-            ? outcomes.Select(outcome => outcome.Reason).ToArray()
-            : [actionPolicy.BaselineRiskReason, .. outcomes.Select(outcome => outcome.Reason)];
-
-    private static RiskLevel EffectiveRiskLevel(
-        RiskRuleContext context,
-        WorkflowActionPolicy actionPolicy,
-        IReadOnlyList<RiskRuleOutcome> outcomes) =>
-        outcomes.Aggregate(
-            Maximum(actionPolicy.BaselineRiskLevel, EvidenceRiskFloor(context)),
-            (current, outcome) => Maximum(current, outcome.RiskLevel));
-
-    private static RiskLevel EvidenceRiskFloor(RiskRuleContext context) =>
-        context.ProcessesPaymentData || context.ContainsSensitiveData
-            ? RiskLevel.Medium
-            : RiskLevel.Low;
 
     private static RiskLevel Maximum(RiskLevel left, RiskLevel right) =>
         (RiskLevel)Math.Max((int)left, (int)right);
 
-    private static string RecommendationFor(RiskLevel riskLevel) => riskLevel switch
+    private static string RecommendationFor(RiskLevel level) => level switch
     {
         RiskLevel.High => "Do not approve yet.",
         RiskLevel.Medium => "Proceed only with standard controls.",
