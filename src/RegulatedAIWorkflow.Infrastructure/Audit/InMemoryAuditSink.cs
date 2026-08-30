@@ -4,16 +4,12 @@ using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Infrastructure.Audit;
 
-/// <summary>
-/// Provides a thread-safe append-only audit adapter for the in-memory workflow slice.
-/// </summary>
+/// <summary>Append-only in-memory audit storage. Stands in for durable WORM storage.</summary>
 public sealed class InMemoryAuditSink : IAuditSink
 {
     private readonly ConcurrentQueue<AuditEvent> events = new();
 
-    /// <summary>
-    /// Gets a point-in-time snapshot of the recorded events.
-    /// </summary>
+    /// <summary>A point-in-time snapshot of the recorded events.</summary>
     public IReadOnlyList<AuditEvent> Events => events.ToArray();
 
     /// <inheritdoc />

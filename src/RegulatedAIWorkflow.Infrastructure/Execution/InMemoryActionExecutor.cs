@@ -4,24 +4,20 @@ using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Infrastructure.Execution;
 
-/// <summary>
-/// Records deterministic mock action effects in memory.
-/// </summary>
+/// <summary>Stands in for the real effect. Records what would have happened; changes nothing outside the process.</summary>
 public sealed class InMemoryActionExecutor : IActionExecutor
 {
     private readonly ConcurrentQueue<ActionExecutionRequest> executions = new();
 
-    /// <summary>Gets a point-in-time snapshot of recorded effects.</summary>
+    /// <summary>A point-in-time snapshot of the recorded effects.</summary>
     public IReadOnlyList<ActionExecutionRequest> Executions => executions.ToArray();
 
     /// <inheritdoc />
-    public Task<ActionExecutionResult> ExecuteAsync(
-        ActionExecutionRequest request,
-        CancellationToken cancellationToken)
+    public Task ExecuteAsync(ActionExecutionRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         executions.Enqueue(request);
-        return Task.FromResult(new ActionExecutionResult(Succeeded: true));
+        return Task.CompletedTask;
     }
 }
