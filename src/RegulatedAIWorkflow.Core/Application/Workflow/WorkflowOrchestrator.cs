@@ -1,7 +1,6 @@
 using RegulatedAIWorkflow.Core.Application.Approval;
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
-using RegulatedAIWorkflow.Core.Domain.Approval;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Execution;
 using RegulatedAIWorkflow.Core.Domain.Risk;
@@ -10,7 +9,9 @@ using RegulatedAIWorkflow.Core.Ports;
 namespace RegulatedAIWorkflow.Core.Application.Workflow;
 
 /// <summary>
-/// Runs the workflow through its trust, policy, approval, audit, and execution gates in order.
+/// Runs the workflow through its gates in a fixed order. The order is the design: authorization precedes
+/// retrieval, policy reads only typed facts, approval precedes the effect, and the attempt is audited
+/// before the effect can begin. Every run writes exactly two audit events.
 /// </summary>
 public sealed class WorkflowOrchestrator(
     IEvidenceRepository evidenceRepository,
@@ -20,30 +21,22 @@ public sealed class WorkflowOrchestrator(
     IActionExecutor actionExecutor,
     TimeProvider timeProvider)
 {
-    private const string ApprovedExecutionRecommendation =
-        "Proceeded under recorded approval. The assessment remains high and the evidence gaps listed below are still outstanding.";
-    private const string ApprovedInherentActionRiskRecommendation =
-        "Proceeded under recorded approval. The action remains classified as high risk.";
-    private const string UnknownSubjectRecommendation =
-        "No such subject in this tenant.";
-
-    /// <summary>
-    /// Validates, authorizes, assesses, verifies, audits, and conditionally executes a workflow request.
-    /// </summary>
+    /// <summary>Validates, authorizes, assesses, verifies, audits, and conditionally executes a request.</summary>
     public async Task<WorkflowRunResult> RunAsync(
         WorkflowPrincipal? principal,
         WorkflowCommand? command,
         CancellationToken cancellationToken = default)
     {
         var workflowId = Guid.CreateVersion7();
-        var auditContext = new WorkflowAuditContext(workflowId)
+        var audit = new WorkflowAuditRecorder(workflowId, auditSink, timeProvider)
         {
             TenantId = WorkflowRequestValidator.SafeIdentifierOrNull(principal?.TenantId),
             ActorUserId = WorkflowRequestValidator.SafeIdentifierOrNull(principal?.UserId),
-            ActorRole = ValidateUserRole(principal),
+            ActorRole = principal is not null && Enum.IsDefined(principal.Role) ? principal.Role : UserRole.Unknown,
             VendorId = WorkflowRequestValidator.SafeIdentifierOrNull(command?.VendorId),
-            RequestedAction = ValidateWorkflowCommand(command),
-            ApprovalId = WorkflowRequestValidator.SafeIdentifierOrNull(command?.ApprovalId)
+            RequestedAction = command is not null && Enum.IsDefined(command.RequestedAction)
+                ? command.RequestedAction
+                : WorkflowAction.Unknown
         };
         var executorCallOutstanding = false;
 
@@ -51,365 +44,128 @@ public sealed class WorkflowOrchestrator(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Stage 1: Validate and reduce the request to safe identity, scope, and action data.
-            var validated = WorkflowRequestValidator.Validate(principal, command);
-            if (validated is null)
+            // 1. Validate, reducing the request to safe identity, scope, and action data.
+            var request = WorkflowRequestValidator.Validate(principal, command);
+            if (request is null)
             {
-                auditContext.ReasonCodes = [WorkflowAuditCodes.InvalidRequest];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateUnknownResult(workflowId, ActionStatus.BlockedInvalidRequest),
+                audit.ReasonCodes = [WorkflowAuditCodes.InvalidRequest];
+                return await audit.CompleteAsync(
+                    WorkflowRunResult.Refused(workflowId, ActionStatus.BlockedInvalidRequest),
                     AuditOutcome.InvalidRequest);
             }
 
-            auditContext.TenantId = validated.TenantId;
-            auditContext.ActorUserId = validated.UserId;
-            auditContext.ActorRole = validated.Role;
-            auditContext.VendorId = validated.VendorId;
-            auditContext.RequestedAction = validated.RequestedAction;
-            auditContext.ApprovalId = validated.ApprovalId;
+            audit.TenantId = request.TenantId;
+            audit.ActorUserId = request.UserId;
+            audit.ActorRole = request.Role;
+            audit.VendorId = request.VendorId;
+            audit.RequestedAction = request.RequestedAction;
+            audit.ApprovalId = request.ApprovalId;
 
-            // Stage 2: Authorize before any evidence can be retrieved or evaluated.
-            if (!ActionAuthorizationPolicy.MayAttempt(validated.Role, validated.RequestedAction))
+            // 2. Authorize before any evidence can be retrieved. Deny by default.
+            if (!WorkflowActionPolicies.MayAttempt(request.Role, request.RequestedAction))
             {
-                auditContext.ReasonCodes = [WorkflowAuditCodes.RoleNotAuthorized];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateUnknownResult(workflowId, ActionStatus.BlockedUnauthorized),
+                audit.ReasonCodes = [WorkflowAuditCodes.RoleNotAuthorized];
+                return await audit.CompleteAsync(
+                    WorkflowRunResult.Refused(workflowId, ActionStatus.BlockedUnauthorized),
                     AuditOutcome.BlockedUnauthorized);
             }
 
-            // Stage 3: Retrieve evidence using only the validated tenant and vendor scope.
-            var retrieved = await evidenceRepository.SearchEvidenceAsync(
-                new EvidenceQuery(validated.TenantId, validated.VendorId),
-                cancellationToken);
+            // 3. Retrieve with scope as a query parameter, never as a filter applied afterwards.
+            var query = new EvidenceQuery(request.TenantId, request.VendorId);
+            var documents = await evidenceRepository.SearchEvidenceAsync(query, cancellationToken);
 
-            // Stage 4: Re-scope repository output at the Core trust boundary.
-            var scoped = EvidenceSecurity.EnforceScope(
-                retrieved,
-                validated.TenantId,
-                validated.VendorId);
-
-            if (scoped.HadOutOfScopeContent)
+            // 4. Defence in depth, against the same definition of scope the adapter was given. A leaky
+            //    adapter is a bug, not a branch: fail loudly, never filter quietly.
+            if (documents.Any(document => !query.Covers(document)))
             {
-                auditContext.ReasonCodes = [WorkflowAuditCodes.EvidenceScopeViolation];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateUnknownResult(workflowId, ActionStatus.BlockedEvidenceUnavailable),
-                    AuditOutcome.BlockedEvidenceUnavailable);
+                throw new InvalidOperationException("The evidence repository returned out-of-scope content.");
             }
 
-            if (scoped.Evidence.Documents.Count == 0)
+            if (documents.Count == 0)
             {
-                auditContext.ReasonCodes = [WorkflowAuditCodes.UnknownSubject];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateUnknownSubjectResult(workflowId),
+                audit.ReasonCodes = [WorkflowAuditCodes.UnknownSubject];
+                return await audit.CompleteAsync(
+                    WorkflowRunResult.UnknownSubject(workflowId, WorkflowAuditCodes.UnknownSubject),
                     AuditOutcome.DeniedUnknownSubject);
             }
 
-            // Stage 5: Evaluate only retained, typed facts; evidence prose never reaches policy.
-            var evaluation = riskEvaluator.EvaluateRisk(new RiskEvaluationInput(
-                validated.RequestedAction,
-                scoped.Evidence.Facts,
-                HasScopedEvidence: true));
+            // 5. Evaluate typed facts only. Snippet prose has no representation in the input type.
+            var facts = documents
+                .SelectMany(document => document.FactTypes
+                    .Select(factType => new EvidenceFact(document.DocumentId, factType)))
+                .ToArray();
+            var evaluation = riskEvaluator.EvaluateRisk(new RiskEvaluationInput(request.RequestedAction, facts));
 
             if (!Enum.IsDefined(evaluation.RiskLevel) || evaluation.RiskLevel is RiskLevel.Unknown)
             {
                 throw new InvalidOperationException("The risk evaluator returned an invalid risk level.");
             }
 
-            // Stage 6: Verify every citation against retained documents and fact provenance.
-            if (!VerifiedCitationResolver.TryResolve(
-                    evaluation.CitationReferences,
-                    scoped.Evidence,
-                    out var citations))
-            {
-                auditContext.ReasonCodes = [WorkflowAuditCodes.CitationVerificationFailed];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateUnknownResult(workflowId, ActionStatus.BlockedEvidenceUnavailable),
-                    AuditOutcome.BlockedEvidenceUnavailable);
-            }
+            // 6. Attach display snippets, and only for documents that were actually retained. ForDisplay
+            //    is the one call that turns untrusted prose into text a caller may see.
+            var retained = documents.ToDictionary(d => d.DocumentId, StringComparer.Ordinal);
+            var citations = evaluation.CitedDocumentIds
+                .Where(retained.ContainsKey)
+                .Select(documentId => new Citation(documentId, retained[documentId].UntrustedSnippet.ForDisplay()))
+                .ToArray();
 
-            auditContext.RiskLevel = evaluation.RiskLevel;
-            auditContext.PolicyVersion = evaluation.PolicyVersion;
-            auditContext.ReferencedDocumentIds = citations.Select(citation => citation.DocumentId).ToArray();
-            auditContext.ReasonCodes = evaluation.Reasons.Select(reason => reason.Code).ToArray();
-            auditContext.MissingEvidenceCodes = evaluation.MissingEvidence.Select(item => item.Code).ToArray();
+            audit.RiskLevel = evaluation.RiskLevel;
+            audit.ReferencedDocumentIds = citations.Select(citation => citation.DocumentId).ToArray();
+            audit.ReasonCodes = evaluation.Reasons.Select(reason => reason.Code).ToArray();
 
-            if (evaluation.EvidenceIsAmbiguous)
-            {
-                auditContext.ReasonCodes = [.. auditContext.ReasonCodes, WorkflowAuditCodes.EvidenceGateFailed];
-                return await CompleteAsync(
-                    auditContext,
-                    CreateAssessedResult(
-                        workflowId,
-                        evaluation,
-                        [],
-                        ActionStatus.BlockedEvidenceUnavailable),
-                    AuditOutcome.BlockedEvidenceUnavailable);
-            }
-
+            // 7. A high-risk action needs a stored approval issued for exactly this request.
             if (evaluation.RequiresApproval)
             {
-                var evidenceSetHash = CanonicalEvidenceHasher.Compute(
-                    validated.TenantId,
-                    validated.VendorId,
-                    scoped.Evidence,
-                    evaluation.PolicyVersion);
-                var approval = await approvalGate.EvaluateAsync(
-                    new ApprovalVerificationRequest(
-                        new WorkflowPrincipal(
-                            validated.TenantId,
-                            validated.UserId,
-                            validated.Role),
-                        validated.VendorId,
-                        validated.RequestedAction,
-                        evidenceSetHash,
-                        evaluation.PolicyVersion,
-                        validated.ApprovalId),
+                var decision = await approvalGate.VerifyAsync(
+                    new WorkflowPrincipal(request.TenantId, request.UserId, request.Role),
+                    request.VendorId,
+                    request.RequestedAction,
+                    request.ApprovalId,
                     cancellationToken);
 
-                auditContext.ApproverUserId = approval.Approval?.ApproverUserId;
-                if (!approval.IsApproved)
+                audit.ApproverUserId = decision.Approval?.ApproverUserId;
+                if (!decision.IsApproved)
                 {
-                    auditContext.ReasonCodes =
-                    [
-                        .. auditContext.ReasonCodes,
-                        ApprovalReasonCode(approval.Outcome)
-                    ];
-
-                    if (validated.ApprovalId is not null)
-                    {
-                        await WriteAuditAsync(
-                            auditContext,
-                            AuditEventType.ApprovalDecision,
-                            AuditOutcome.ApprovalRejected);
-                    }
-
-                    return await CompleteAsync(
-                        auditContext,
-                        CreateAssessedResult(
-                            workflowId,
-                            evaluation,
-                            citations,
-                            ActionStatus.BlockedPendingApproval),
+                    audit.ReasonCodes = [.. audit.ReasonCodes, decision.ReasonCode];
+                    return await audit.CompleteAsync(
+                        WorkflowRunResult.Assessed(workflowId, evaluation, citations, ActionStatus.BlockedPendingApproval),
                         AuditOutcome.BlockedPendingApproval);
                 }
-
-                await WriteAuditAsync(
-                    auditContext,
-                    AuditEventType.ApprovalDecision,
-                    AuditOutcome.ApprovalAccepted);
             }
 
-            // Stage 7: Persist authorization before any regulated side effect can begin.
-            await WriteAuditAsync(
-                auditContext,
-                AuditEventType.ActionAttempt,
-                AuditOutcome.AuthorizedForExecution);
+            // 8. Persist the attempt before the effect. If this write fails, nothing runs.
+            await audit.WriteAsync(AuditEventType.ActionAttempt, AuditOutcome.AuthorizedForExecution);
 
-            // Stage 8: Execute only after every applicable gate and mandatory audit write passed.
-            var executionRequest = new ActionExecutionRequest(
-                workflowId,
-                validated.TenantId,
-                validated.VendorId,
-                validated.UserId,
-                validated.RequestedAction);
+            // 9. Execute. The last step, and the only one that changes the world.
             executorCallOutstanding = true;
-            var execution = await actionExecutor.ExecuteAsync(executionRequest, cancellationToken);
+            await actionExecutor.ExecuteAsync(
+                new ActionExecutionRequest(
+                    workflowId,
+                    request.TenantId,
+                    request.VendorId,
+                    request.UserId,
+                    request.RequestedAction),
+                cancellationToken);
             executorCallOutstanding = false;
 
-            if (!execution.Succeeded)
-            {
-                auditContext.ReasonCodes =
-                [
-                    .. auditContext.ReasonCodes,
-                    WorkflowAuditCodes.ExecutionUnavailable
-                ];
-                await WriteAuditAsync(
-                    auditContext,
-                    AuditEventType.ActionExecution,
-                    AuditOutcome.BlockedExecutionUnavailable);
-
-                return await CompleteDispatchedAsync(
-                    auditContext,
-                    CreateAssessedResult(
-                        workflowId,
-                        evaluation,
-                        citations,
-                        ActionStatus.BlockedExecutionUnavailable),
-                    AuditOutcome.BlockedExecutionUnavailable);
-            }
-
-            await WriteAuditAsync(
-                auditContext,
-                AuditEventType.ActionExecution,
-                AuditOutcome.Executed);
-
-            return await CompleteDispatchedAsync(
-                auditContext,
-                CreateAssessedResult(
-                    workflowId,
-                    evaluation,
-                    citations,
-                    ActionStatus.Executed),
-                AuditOutcome.Executed);
+            // 10. Record the terminal outcome and return.
+            await audit.WriteAsync(AuditEventType.WorkflowCompleted, AuditOutcome.Executed);
+            return WorkflowRunResult.Assessed(workflowId, evaluation, citations, ActionStatus.Executed)
+                with
+            { AuditEventIds = audit.EventIds };
         }
         catch
         {
-            var failureOutcome = executorCallOutstanding
-                ? AuditOutcome.ExecutionOutcomeUnknown
-                : AuditOutcome.Failed;
+            // A failure after dispatch does not prove the effect did not happen. Never record it as Failed.
             if (executorCallOutstanding)
             {
-                auditContext.ReasonCodes =
-                [
-                    .. auditContext.ReasonCodes,
-                    WorkflowAuditCodes.ExecutionOutcomeUnknown
-                ];
-                await WriteAuditAsync(
-                    auditContext,
-                    AuditEventType.ActionExecution,
-                    failureOutcome);
+                audit.ReasonCodes = [.. audit.ReasonCodes, WorkflowAuditCodes.ExecutionOutcomeUnknown];
             }
 
-            await WriteAuditAsync(
-                auditContext,
+            await audit.WriteAsync(
                 AuditEventType.WorkflowCompleted,
-                failureOutcome);
+                executorCallOutstanding ? AuditOutcome.ExecutionOutcomeUnknown : AuditOutcome.Failed);
             throw;
         }
     }
-
-    private static WorkflowRunResult CreateUnknownResult(
-        Guid workflowId,
-        ActionStatus actionStatus) =>
-        new(
-            workflowId,
-            RiskLevel.Unknown,
-            string.Empty,
-            [],
-            [],
-            [],
-            RequiresApproval: false,
-            actionStatus,
-            AuditEventIds: []);
-
-    private static WorkflowRunResult CreateUnknownSubjectResult(Guid workflowId) =>
-        new(
-            workflowId,
-            RiskLevel.Unknown,
-            UnknownSubjectRecommendation,
-            [new RiskReason(WorkflowAuditCodes.UnknownSubject, UnknownSubjectRecommendation)],
-            [],
-            [],
-            RequiresApproval: false,
-            ActionStatus.DeniedUnknownSubject,
-            AuditEventIds: []);
-
-    private static WorkflowRunResult CreateAssessedResult(
-        Guid workflowId,
-        RiskEvaluation evaluation,
-        IReadOnlyList<Citation> citations,
-        ActionStatus actionStatus) =>
-        new(
-            workflowId,
-            evaluation.RiskLevel,
-            RecommendationFor(evaluation, actionStatus),
-            evaluation.Reasons,
-            citations,
-            evaluation.MissingEvidence,
-            evaluation.RequiresApproval,
-            actionStatus,
-            AuditEventIds: []);
-
-    private static string RecommendationFor(
-        RiskEvaluation evaluation,
-        ActionStatus actionStatus) =>
-        actionStatus is ActionStatus.Executed && evaluation.RequiresApproval
-            ? evaluation.MissingEvidence.Count > 0
-                ? ApprovedExecutionRecommendation
-                : ApprovedInherentActionRiskRecommendation
-            : evaluation.Recommendation;
-
-    private async Task<WorkflowRunResult> CompleteAsync(
-        WorkflowAuditContext auditContext,
-        WorkflowRunResult result,
-        AuditOutcome outcome)
-    {
-        // Stage 7: Persist the attempt and terminal outcome before exposing a result.
-        await WriteAuditAsync(auditContext, AuditEventType.ActionAttempt, outcome);
-        await WriteAuditAsync(auditContext, AuditEventType.WorkflowCompleted, outcome);
-
-        // Stage 8: Return only the identifiers of audit events that were written successfully.
-        return result with { AuditEventIds = auditContext.EventIds.ToArray() };
-    }
-
-    private async Task<WorkflowRunResult> CompleteDispatchedAsync(
-        WorkflowAuditContext auditContext,
-        WorkflowRunResult result,
-        AuditOutcome outcome)
-    {
-        await WriteAuditAsync(
-            auditContext,
-            AuditEventType.WorkflowCompleted,
-            outcome);
-        return result with { AuditEventIds = auditContext.EventIds.ToArray() };
-    }
-
-    private async Task WriteAuditAsync(
-        WorkflowAuditContext auditContext,
-        AuditEventType eventType,
-        AuditOutcome outcome)
-    {
-        var eventId = Guid.CreateVersion7();
-        var auditEvent = new AuditEvent(
-            eventId,
-            auditContext.WorkflowId,
-            timeProvider.GetUtcNow().ToUniversalTime(),
-            auditContext.TenantId,
-            auditContext.ActorUserId,
-            auditContext.ActorRole,
-            auditContext.VendorId,
-            eventType,
-            auditContext.RequestedAction,
-            auditContext.RiskLevel,
-            outcome,
-            auditContext.ReferencedDocumentIds,
-            auditContext.ReasonCodes,
-            auditContext.MissingEvidenceCodes,
-            auditContext.PolicyVersion,
-            auditContext.ApprovalId,
-            auditContext.ApproverUserId);
-
-        await auditSink.WriteAuditEventAsync(auditEvent, CancellationToken.None);
-        auditContext.EventIds.Add(eventId);
-    }
-
-    private static WorkflowAction ValidateWorkflowCommand(WorkflowCommand? command) =>
-        command is not null && Enum.IsDefined(command.RequestedAction)
-            ? command.RequestedAction
-            : WorkflowAction.Unknown;
-
-    private static UserRole ValidateUserRole(WorkflowPrincipal? principal) =>
-        principal is not null && Enum.IsDefined(principal.Role)
-            ? principal.Role
-            : UserRole.Unknown;
-
-    private static string ApprovalReasonCode(ApprovalOutcome outcome) => outcome switch
-    {
-        ApprovalOutcome.Missing => WorkflowAuditCodes.ApprovalMissing,
-        ApprovalOutcome.NotFound => WorkflowAuditCodes.ApprovalNotFound,
-        ApprovalOutcome.ActionMismatch => WorkflowAuditCodes.ApprovalActionMismatch,
-        ApprovalOutcome.VendorMismatch => WorkflowAuditCodes.ApprovalVendorMismatch,
-        ApprovalOutcome.PolicySuperseded => WorkflowAuditCodes.ApprovalPolicySuperseded,
-        ApprovalOutcome.EvidenceSuperseded => WorkflowAuditCodes.ApprovalEvidenceSuperseded,
-        ApprovalOutcome.NotYetValid => WorkflowAuditCodes.ApprovalNotYetValid,
-        ApprovalOutcome.Expired => WorkflowAuditCodes.ApprovalExpired,
-        ApprovalOutcome.SelfApproval => WorkflowAuditCodes.ApprovalSelfApproval,
-        ApprovalOutcome.WrongRole => WorkflowAuditCodes.ApprovalWrongRole,
-        _ => throw new InvalidOperationException("A valid approval cannot produce a rejection code.")
-    };
 }
