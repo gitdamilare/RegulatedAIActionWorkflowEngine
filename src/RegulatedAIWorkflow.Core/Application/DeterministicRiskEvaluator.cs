@@ -8,7 +8,9 @@ namespace RegulatedAIWorkflow.Core.Application;
 /// <summary>
 /// Server-owned risk policy. Reads only typed facts, so no evidence prose can reach a rule condition.
 /// Effective risk is the maximum of the action baseline and every rule that fires; a rule can raise the
-/// level but never lower it, and no rule short-circuits the rest.
+/// level but never lower it, and no rule short-circuits the rest. Whether the resulting level needs a
+/// human is the action's own threshold, not a constant, so a low-consequence action can clear the same
+/// evidence that stops an irreversible one.
 /// </summary>
 public sealed class DeterministicRiskEvaluator : IRiskEvaluator
 {
@@ -50,7 +52,7 @@ public sealed class DeterministicRiskEvaluator : IRiskEvaluator
             [actionPolicy.BaselineRiskReason, .. outcomes.Select(outcome => outcome.Reason)],
             [.. outcomes.Select(outcome => outcome.MissingEvidence).OfType<MissingEvidenceItem>()],
             context.SourceDocumentIdsFor(outcomes.SelectMany(outcome => outcome.CitedFactTypes)),
-            RequiresApproval: level is RiskLevel.High);
+            RequiresApproval: actionPolicy.ApprovalRequiredAtOrAbove is { } threshold && level >= threshold);
     }
 
     private static RiskLevel Maximum(RiskLevel left, RiskLevel right) =>

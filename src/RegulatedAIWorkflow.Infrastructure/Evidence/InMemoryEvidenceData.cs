@@ -3,7 +3,7 @@ using RegulatedAIWorkflow.Core.Domain.Evidence;
 namespace RegulatedAIWorkflow.Infrastructure.Evidence;
 
 /// <summary>
-/// The fake corpus: two tenants, two vendors, and one vendor id deliberately shared across both tenants
+/// The fake corpus: two tenants, three vendors, and one vendor id deliberately shared across both tenants
 /// so cross-tenant isolation is observable rather than asserted. Fact types are the server-owned
 /// metadata an ingestion pipeline would assign; the snippet beside them is untrusted vendor prose, and
 /// naming it at every call site is the point of <see cref="UntrustedText.FromExternalSource"/>.
@@ -52,6 +52,18 @@ internal static class InMemoryEvidenceData
             [EvidenceFactType.ContainsSensitiveData, EvidenceFactType.BreachNotificationPresent],
             UntrustedText.FromExternalSource(
                 "Lakeshore Analytics processes customer usage analytics and must notify Northstar Bank within 24 hours of a security incident.")),
+
+        // northstar-bank / brightpath-print: a vendor that touches no regulated data at all. It exists so
+        // the low end of the risk vocabulary is reachable through the API rather than only in unit tests:
+        // no scope rule fires, so nothing raises the level above an action baseline.
+        new(
+            "northstar-brightpath-contract",
+            "northstar-bank",
+            "brightpath-print",
+            EvidenceDocumentType.Contract,
+            [EvidenceFactType.BreachNotificationPresent],
+            UntrustedText.FromExternalSource(
+                "Brightpath Print produces branded stationery for Northstar Bank, receives no customer data, and notifies Northstar Bank within 24 hours of any security incident.")),
 
         // harborview-bank / silverline-payments: same vendor id, different tenant, complete evidence.
         new(
