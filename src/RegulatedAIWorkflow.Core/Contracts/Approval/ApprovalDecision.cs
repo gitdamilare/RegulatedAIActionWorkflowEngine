@@ -14,6 +14,8 @@ public sealed record ApprovalDecision(ApprovalOutcome Outcome, ApprovalRecord? A
         ApprovalOutcome.Missing => WorkflowAuditCodes.ApprovalMissing,
         ApprovalOutcome.NotFound => WorkflowAuditCodes.ApprovalNotFound,
         ApprovalOutcome.Mismatch => WorkflowAuditCodes.ApprovalMismatch,
+        ApprovalOutcome.EvidenceSuperseded => WorkflowAuditCodes.ApprovalEvidenceSuperseded,
+        ApprovalOutcome.Expired => WorkflowAuditCodes.ApprovalExpired,
         ApprovalOutcome.SelfApproval => WorkflowAuditCodes.ApprovalSelfApproval,
         _ => throw new InvalidOperationException("An approved decision has no rejection code.")
     };
@@ -30,6 +32,12 @@ public enum ApprovalOutcome
 
     /// <summary>The approval was issued for a different vendor or action.</summary>
     Mismatch,
+
+    /// <summary>The evidence changed after the approval was granted, so it covers a decision nobody made.</summary>
+    EvidenceSuperseded,
+
+    /// <summary>The approval's validity window has closed.</summary>
+    Expired,
 
     /// <summary>The requester is the approver. Separation of duties forbids this.</summary>
     SelfApproval,

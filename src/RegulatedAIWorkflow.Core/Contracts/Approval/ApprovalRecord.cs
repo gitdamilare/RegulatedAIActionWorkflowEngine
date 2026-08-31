@@ -4,8 +4,8 @@ namespace RegulatedAIWorkflow.Core.Contracts.Approval;
 
 /// <summary>
 /// The stored artifact that authorizes one regulated effect. The server creates it; a caller can only
-/// present its id. Binding it to tenant, vendor, action, and a named approver is what makes it an
-/// approval rather than a caller-supplied claim.
+/// present its id. Binding it to tenant, vendor, action, a named approver, the evidence set that was on
+/// the table, and a validity window is what makes it an approval of a decision rather than of a vendor.
 /// </summary>
 public sealed record ApprovalRecord(
     string ApprovalId,
@@ -14,4 +14,6 @@ public sealed record ApprovalRecord(
     WorkflowAction Action,
     string ApproverUserId,
     UserRole ApproverRole,
-    DateTimeOffset IssuedAtUtc);
+    string EvidenceSetHash,
+    DateTimeOffset IssuedAtUtc,
+    DateTimeOffset ExpiresAtUtc);
