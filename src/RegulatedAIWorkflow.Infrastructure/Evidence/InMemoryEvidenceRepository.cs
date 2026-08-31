@@ -3,30 +3,21 @@ using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Infrastructure.Evidence;
 
-/// <summary>
-/// Retrieves tenant- and vendor-scoped evidence from the in-memory corpus.
-/// </summary>
+/// <summary>Retrieves evidence scoped to exactly one tenant and vendor.</summary>
 public sealed class InMemoryEvidenceRepository : IEvidenceRepository
 {
     /// <inheritdoc />
-    public Task<EvidenceSearchResult> SearchEvidenceAsync(
+    public Task<IReadOnlyList<EvidenceDocument>> SearchEvidenceAsync(
         EvidenceQuery query,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var documents = InMemoryEvidenceData.Documents
-            .Where(document =>
-                string.Equals(document.TenantId, query.TenantId, StringComparison.Ordinal) &&
-                string.Equals(document.VendorId, query.VendorId, StringComparison.Ordinal))
+        IReadOnlyList<EvidenceDocument> documents = InMemoryEvidenceData.Documents
+            .Where(query.Covers)
             .ToArray();
 
-        var facts = InMemoryEvidenceData.Facts
-            .Where(fact =>
-                string.Equals(fact.TenantId, query.TenantId, StringComparison.Ordinal) &&
-                string.Equals(fact.VendorId, query.VendorId, StringComparison.Ordinal))
-            .ToArray();
-
-        return Task.FromResult(new EvidenceSearchResult(documents, facts));
+        return Task.FromResult(documents);
     }
 }

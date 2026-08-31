@@ -1,16 +1,33 @@
 namespace RegulatedAIWorkflow.Core.Domain.Evidence;
 
 /// <summary>
-/// Represents a tenant-scoped evidence document whose prose remains untrusted.
+/// A tenant-scoped evidence document. <c>FactTypes</c> is server-owned metadata assigned at ingestion and
+/// is the only part policy may read; <c>UntrustedSnippet</c> is external prose whose type says so, and
+/// which reaches a caller only through an explicit <see cref="UntrustedText.ForDisplay"/> call.
 /// </summary>
-/// <param name="DocumentId">The stable document identifier.</param>
-/// <param name="TenantId">The tenant that owns the document.</param>
-/// <param name="VendorId">The vendor to which the document applies.</param>
-/// <param name="DocumentType">The document's business purpose.</param>
-/// <param name="UntrustedSnippet">External prose that cannot directly influence policy.</param>
 public sealed record EvidenceDocument(
     string DocumentId,
     string TenantId,
     string VendorId,
     EvidenceDocumentType DocumentType,
+    IReadOnlyList<EvidenceFactType> FactTypes,
     UntrustedText UntrustedSnippet);
+
+/// <summary>Identifies the business purpose of an evidence document.</summary>
+public enum EvidenceDocumentType
+{
+    /// <summary>An internal policy document.</summary>
+    Policy,
+
+    /// <summary>A contract governing the vendor relationship.</summary>
+    Contract,
+
+    /// <summary>Evidence supplied directly by the vendor.</summary>
+    VendorSubmission,
+
+    /// <summary>A SOC 2 assurance report.</summary>
+    Soc2Report,
+
+    /// <summary>A schedule governing retained data.</summary>
+    DataRetentionSchedule
+}

@@ -4,12 +4,9 @@ using RegulatedAIWorkflow.Core.Domain.Evidence;
 namespace RegulatedAIWorkflow.Core.Domain.Risk;
 
 /// <summary>
-/// Supplies deterministic risk policy with a structured action, normalized facts, and scope state only.
+/// The complete input to deterministic risk policy: a validated action and typed, source-attributed facts.
+/// It carries no question, snippet, or other free text, so evidence prose has no path into a policy decision.
 /// </summary>
-/// <param name="RequestedAction">The validated server-recognized action being assessed.</param>
-/// <param name="Facts">The scoped, source-attributed facts to evaluate.</param>
-/// <param name="HasScopedEvidence">Whether trustworthy evidence remains after scope checks.</param>
 public sealed record RiskEvaluationInput(
     WorkflowAction RequestedAction,
-    IReadOnlyList<EvidenceFact> Facts,
-    bool HasScopedEvidence);
+    IReadOnlyList<EvidenceFact> Facts);

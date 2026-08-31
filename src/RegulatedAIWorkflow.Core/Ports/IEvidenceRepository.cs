@@ -3,17 +3,13 @@ using RegulatedAIWorkflow.Core.Domain.Evidence;
 namespace RegulatedAIWorkflow.Core.Ports;
 
 /// <summary>
-/// Retrieves evidence within an explicit tenant and vendor scope.
+/// Retrieves evidence. Scope is a parameter of the query, not a filter applied to a wider result, so an
+/// adapter is never asked to hand Core anything it must then discard.
 /// </summary>
 public interface IEvidenceRepository
 {
-    /// <summary>
-    /// Searches for evidence matching the requested scope.
-    /// </summary>
-    /// <param name="query">The tenant and vendor scope to search.</param>
-    /// <param name="cancellationToken">A token used to cancel the asynchronous operation.</param>
-    /// <returns>The retrieved documents and normalized facts.</returns>
-    Task<EvidenceSearchResult> SearchEvidenceAsync(
+    /// <summary>Returns the documents held for exactly the requested scope.</summary>
+    Task<IReadOnlyList<EvidenceDocument>> SearchEvidenceAsync(
         EvidenceQuery query,
         CancellationToken cancellationToken);
 }

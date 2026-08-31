@@ -1,38 +1,58 @@
 using RegulatedAIWorkflow.Core.Domain.Evidence;
-using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Core.Application.Risk;
 
 /// <summary>
-/// Provides policy rules with a typed, prose-free view of an evaluation request.
+/// The prose-free view of an evaluation that rules are allowed to see. It answers only two kinds of
+/// question: whether a normalized fact is present, and which documents supplied a given fact.
 /// </summary>
 internal sealed class RiskRuleContext
 {
-    private readonly HashSet<EvidenceFactType> factTypes;
+    private readonly IReadOnlyList<EvidenceFact> facts;
+    private readonly HashSet<EvidenceFactType> presentFactTypes;
 
-    public RiskRuleContext(RiskEvaluationInput input)
+    internal RiskRuleContext(IReadOnlyList<EvidenceFact> facts)
     {
-        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(facts);
 
-        Facts = input.Facts;
-        HasScopedEvidence = input.HasScopedEvidence;
-        factTypes = input.Facts
-            .Select(fact => fact.FactType)
-            .ToHashSet();
+        this.facts = facts;
+        presentFactTypes = facts.Select(fact => fact.FactType).ToHashSet();
     }
 
-    /// <summary>The source-attributed typed facts available to policy.</summary>
-    public IReadOnlyList<EvidenceFact> Facts { get; }
-
-    /// <summary>Whether trustworthy evidence survived scope enforcement.</summary>
-    public bool HasScopedEvidence { get; }
-
     /// <summary>Whether the vendor processes payment data.</summary>
-    public bool ProcessesPaymentData => Has(EvidenceFactType.ProcessesPaymentData);
+    internal bool ProcessesPaymentData => Has(EvidenceFactType.ProcessesPaymentData);
 
     /// <summary>Whether the vendor handles sensitive data.</summary>
-    public bool ContainsSensitiveData => Has(EvidenceFactType.ContainsSensitiveData);
+    internal bool ContainsSensitiveData => Has(EvidenceFactType.ContainsSensitiveData);
 
-    /// <summary>Checks for a normalized fact without exposing evidence prose.</summary>
-    public bool Has(EvidenceFactType factType) => factTypes.Contains(factType);
+    /// <summary>Checks for a normalized fact. The only question a rule may ask of the evidence.</summary>
+    internal bool Has(EvidenceFactType factType) => presentFactTypes.Contains(factType);
+
+    /// <summary>
+    /// Names the documents that supplied the given facts, in the order the facts were cited and then by
+    /// document id, without repeating a document that several facts share.
+    /// </summary>
+    internal IReadOnlyList<string> SourceDocumentIdsFor(IEnumerable<EvidenceFactType> citedFactTypes)
+    {
+        var documentIds = new List<string>();
+
+        foreach (var factType in citedFactTypes)
+        {
+            var sources = facts
+                .Where(fact => fact.FactType == factType)
+                .Select(fact => fact.SourceDocumentId)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal);
+
+            foreach (var documentId in sources)
+            {
+                if (!documentIds.Contains(documentId, StringComparer.Ordinal))
+                {
+                    documentIds.Add(documentId);
+                }
+            }
+        }
+
+        return documentIds;
+    }
 }

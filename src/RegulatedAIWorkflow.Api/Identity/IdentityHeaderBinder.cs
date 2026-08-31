@@ -3,17 +3,11 @@ using RegulatedAIWorkflow.Core.Contracts.Workflow;
 
 namespace RegulatedAIWorkflow.Api.Identity;
 
-internal enum IdentityBindingFailure
-{
-    None,
-    Missing,
-    Invalid
-}
-
-internal sealed record IdentityBindingResult(
-    WorkflowPrincipal? Principal,
-    IdentityBindingFailure Failure);
-
+/// <summary>
+/// Binds identity from transport headers. In production these values come from a validated token; here
+/// they are asserted, not authenticated. What matters for the design is that identity never comes from
+/// the request body, so a caller cannot name itself alongside the action it wants performed.
+/// </summary>
 internal static class IdentityHeaderBinder
 {
     internal const string TenantHeader = "X-Tenant-Id";
@@ -22,64 +16,55 @@ internal static class IdentityHeaderBinder
 
     private const int MaximumIdentifierLength = 128;
 
-    internal static IdentityBindingResult Bind(IHeaderDictionary headers)
+    /// <summary>Returns true and a principal, or false and the problem response to return.</summary>
+    internal static bool TryBind(
+        IHeaderDictionary headers,
+        out WorkflowPrincipal principal,
+        out IResult? problem)
     {
+        principal = null!;
+
         if (!headers.TryGetValue(TenantHeader, out var tenantValues) ||
             !headers.TryGetValue(UserHeader, out var userValues) ||
             !headers.TryGetValue(RoleHeader, out var roleValues))
         {
-            return new IdentityBindingResult(null, IdentityBindingFailure.Missing);
-        }
-
-        if (!TryGetSingleValue(tenantValues, out var tenantId) ||
-            !TryGetSingleValue(userValues, out var userId) ||
-            !TryGetSingleValue(roleValues, out var roleValue) ||
-            !IsValidIdentifier(tenantId) ||
-            !IsValidIdentifier(userId) ||
-            !IsValidIdentifier(roleValue) ||
-            !TryMapRole(roleValue, out var role))
-        {
-            return new IdentityBindingResult(null, IdentityBindingFailure.Invalid);
-        }
-
-        return new IdentityBindingResult(
-            new WorkflowPrincipal(tenantId!, userId!, role),
-            IdentityBindingFailure.None);
-    }
-
-    private static bool TryGetSingleValue(StringValues values, out string? value)
-    {
-        if (values.Count != 1)
-        {
-            value = null;
+            problem = Results.Problem(
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: "Asserted identity headers are required.");
             return false;
         }
 
-        value = values[0];
+        if (!TrySingle(tenantValues, out var tenantId) ||
+            !TrySingle(userValues, out var userId) ||
+            !TrySingle(roleValues, out var roleValue) ||
+            !TryMapRole(roleValue, out var role))
+        {
+            problem = Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Asserted identity headers are invalid.");
+            return false;
+        }
+
+        principal = new WorkflowPrincipal(tenantId, userId, role);
+        problem = null;
         return true;
     }
 
-    private static bool IsValidIdentifier(string? value) =>
-        !string.IsNullOrWhiteSpace(value) &&
-        value.Length <= MaximumIdentifierLength &&
-        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
-        !value.Any(char.IsControl);
-
-    private static bool TryMapRole(string? value, out UserRole role)
+    private static bool TrySingle(StringValues values, out string value)
     {
-        if (Enum.TryParse<UserRole>(value, ignoreCase: true, out var parsed) &&
-            Enum.IsDefined(parsed) &&
-            parsed is not UserRole.Unknown &&
-            string.Equals(
-                value,
-                Enum.GetName(parsed),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            role = parsed;
-            return true;
-        }
+        value = values.Count == 1 ? values[0] ?? string.Empty : string.Empty;
+        return !string.IsNullOrWhiteSpace(value) &&
+            value.Length <= MaximumIdentifierLength &&
+            string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+            !value.Any(char.IsControl);
+    }
 
+    private static bool TryMapRole(string value, out UserRole role)
+    {
         role = UserRole.Unknown;
-        return false;
+        return Enum.TryParse(value, ignoreCase: true, out role) &&
+            Enum.IsDefined(role) &&
+            role is not UserRole.Unknown &&
+            string.Equals(value, Enum.GetName(role), StringComparison.OrdinalIgnoreCase);
     }
 }

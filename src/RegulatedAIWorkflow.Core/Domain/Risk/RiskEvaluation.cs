@@ -1,22 +1,16 @@
 namespace RegulatedAIWorkflow.Core.Domain.Risk;
 
-/// <summary>
-/// Captures a deterministic, structured risk assessment.
-/// </summary>
-/// <param name="RiskLevel">The assessed risk level.</param>
-/// <param name="Recommendation">The policy-authored recommended response.</param>
-/// <param name="Reasons">The structured reasons supporting the assessment.</param>
-/// <param name="CitationReferences">Document identifiers supporting the reasons.</param>
-/// <param name="MissingEvidence">Evidence gaps considered by the assessment.</param>
-/// <param name="RequiresApproval">Whether an independent approval is required.</param>
-/// <param name="EvidenceIsAmbiguous">Whether trustworthy evidence or policy applicability is unresolved.</param>
-/// <param name="PolicyVersion">The stable version of the policy that produced the assessment.</param>
+/// <summary>A deterministic, structured risk assessment produced from typed facts alone.</summary>
 public sealed record RiskEvaluation(
     RiskLevel RiskLevel,
     string Recommendation,
     IReadOnlyList<RiskReason> Reasons,
-    IReadOnlyList<RiskCitationReference> CitationReferences,
     IReadOnlyList<MissingEvidenceItem> MissingEvidence,
-    bool RequiresApproval,
-    bool EvidenceIsAmbiguous,
-    string PolicyVersion);
+    IReadOnlyList<string> CitedDocumentIds,
+    bool RequiresApproval);
+
+/// <summary>A structured reason supporting an assessment. Codes are server-owned; text is never caller-supplied.</summary>
+public sealed record RiskReason(string Code, string Message);
+
+/// <summary>An evidence gap the assessment counted against the vendor.</summary>
+public sealed record MissingEvidenceItem(string Code, string Description);

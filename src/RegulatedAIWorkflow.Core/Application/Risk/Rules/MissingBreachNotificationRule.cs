@@ -3,7 +3,10 @@ using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Core.Application.Risk.Rules;
 
-/// <summary>Reports a missing or explicitly absent breach-notification clause.</summary>
+/// <summary>
+/// Reports a missing or explicitly absent breach-notification clause. Silence and an explicit absence are
+/// treated the same way: neither is evidence that the clause exists.
+/// </summary>
 internal sealed class MissingBreachNotificationRule : IRiskRule
 {
     public RiskRuleOutcome? Evaluate(RiskRuleContext context) =>
@@ -18,6 +21,6 @@ internal sealed class MissingBreachNotificationRule : IRiskRule
                 new MissingEvidenceItem(
                     "BREACH_NOTIFICATION_CLAUSE",
                     "Contractual breach-notification clause"),
-                EvidenceFactType.BreachNotificationMissing)
+                [EvidenceFactType.BreachNotificationMissing])
             : null;
 }

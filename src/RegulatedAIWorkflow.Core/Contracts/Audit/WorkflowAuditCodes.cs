@@ -1,67 +1,42 @@
 namespace RegulatedAIWorkflow.Core.Contracts.Audit;
 
 /// <summary>
-/// Provides the stable workflow-level reason codes written to audit events.
+/// Reason codes the orchestrator and the approval gate emit. Risk reason and missing-evidence codes are
+/// owned by <see cref="Application.DeterministicRiskEvaluator"/>; injection rule codes are owned by
+/// <see cref="Application.Evidence.InjectionScanner"/>. Each vocabulary has exactly one owner.
 /// </summary>
 public static class WorkflowAuditCodes
 {
-    /// <summary>The request failed bounded validation.</summary>
+    /// <summary>The request failed validation.</summary>
     public const string InvalidRequest = "INVALID_REQUEST";
 
-    /// <summary>The caller's role may not attempt the requested action.</summary>
+    /// <summary>The actor's role may not attempt the requested action.</summary>
     public const string RoleNotAuthorized = "ROLE_NOT_AUTHORIZED";
 
-    /// <summary>Retrieved evidence violated the requested tenant or vendor scope.</summary>
-    public const string EvidenceScopeViolation = "EVIDENCE_SCOPE_VIOLATION";
-
-    /// <summary>One or more assessment citations could not be verified.</summary>
-    public const string CitationVerificationFailed = "CITATION_VERIFICATION_FAILED";
-
-    /// <summary>Evidence could not pass the trusted-evidence gate.</summary>
-    public const string EvidenceGateFailed = "EVIDENCE_GATE_FAILED";
-
-    /// <summary>The executor reported that no regulated effect occurred.</summary>
-    public const string ExecutionUnavailable = "EXECUTION_UNAVAILABLE";
-
-    /// <summary>The executor call ended without a definitive regulated-effect outcome.</summary>
-    public const string ExecutionOutcomeUnknown = "EXECUTION_OUTCOME_UNKNOWN";
-
-    /// <summary>No subject exists within the caller's tenant scope.</summary>
+    /// <summary>No evidence exists for this tenant and vendor.</summary>
     public const string UnknownSubject = "UNKNOWN_SUBJECT";
 
-    /// <summary>The principal's role cannot issue the requested approval.</summary>
-    public const string ApproverRoleInsufficient = "APPROVER_ROLE_INSUFFICIENT";
+    /// <summary>An assessment cited a document that was not among the retained evidence.</summary>
+    public const string CitationVerificationFailed = "CITATION_VERIFICATION_FAILED";
 
-    /// <summary>No evidence exists for the requested vendor.</summary>
-    public const string VendorNotFound = "VENDOR_NOT_FOUND";
-
-    /// <summary>No approval identifier was supplied.</summary>
+    /// <summary>No approval id was presented for an action that requires one.</summary>
     public const string ApprovalMissing = "APPROVAL_MISSING";
 
-    /// <summary>No tenant-scoped approval matched the supplied identifier.</summary>
+    /// <summary>No approval with the presented id exists in this tenant.</summary>
     public const string ApprovalNotFound = "APPROVAL_NOT_FOUND";
 
-    /// <summary>The stored approval applies to a different action.</summary>
-    public const string ApprovalActionMismatch = "APPROVAL_ACTION_MISMATCH";
+    /// <summary>The approval was issued for a different vendor or action.</summary>
+    public const string ApprovalMismatch = "APPROVAL_MISMATCH";
 
-    /// <summary>The stored approval applies to a different vendor.</summary>
-    public const string ApprovalVendorMismatch = "APPROVAL_VENDOR_MISMATCH";
-
-    /// <summary>The risk policy changed after approval issuance.</summary>
-    public const string ApprovalPolicySuperseded = "APPROVAL_POLICY_SUPERSEDED";
-
-    /// <summary>The evidence or typed facts changed after approval issuance.</summary>
+    /// <summary>The evidence changed after the approval was granted.</summary>
     public const string ApprovalEvidenceSuperseded = "APPROVAL_EVIDENCE_SUPERSEDED";
 
-    /// <summary>The approval's issue time is still in the future.</summary>
-    public const string ApprovalNotYetValid = "APPROVAL_NOT_YET_VALID";
-
-    /// <summary>The approval has reached its expiry time.</summary>
+    /// <summary>The approval's validity window has closed.</summary>
     public const string ApprovalExpired = "APPROVAL_EXPIRED";
 
-    /// <summary>The requester and approver have the same identity.</summary>
+    /// <summary>The requester is the approver.</summary>
     public const string ApprovalSelfApproval = "APPROVAL_SELF_APPROVAL";
 
-    /// <summary>The stored approver role cannot approve the action.</summary>
-    public const string ApprovalWrongRole = "APPROVAL_WRONG_ROLE";
+    /// <summary>The executor call was outstanding when the run failed.</summary>
+    public const string ExecutionOutcomeUnknown = "EXECUTION_OUTCOME_UNKNOWN";
 }

@@ -4,47 +4,33 @@ using RegulatedAIWorkflow.Core.Contracts.Workflow;
 
 namespace RegulatedAIWorkflow.Api.Dtos;
 
-/// <summary>Contains the untrusted body of an approval request.</summary>
-public sealed record ApprovalRequest(
-    string? VendorId,
-    WorkflowAction RequestedAction,
-    int? ValidForHours = null);
+/// <summary>The untrusted body of an approval request. The approver's identity comes from headers, not from here.</summary>
+public sealed record ApprovalRequest(string? VendorId, WorkflowAction RequestedAction);
 
-/// <summary>Contains a successfully recorded approval.</summary>
+/// <summary>The wire representation of a recorded approval.</summary>
 public sealed record ApprovalResponse(
     string ApprovalId,
-    string ApproverUserId,
+    string TenantId,
     string VendorId,
     string RequestedAction,
+    string ApproverUserId,
     string EvidenceSetHash,
     DateTimeOffset IssuedAtUtc,
-    DateTimeOffset ExpiresAtUtc,
-    string RiskPolicyVersion)
+    DateTimeOffset ExpiresAtUtc)
 {
-    /// <summary>Maps a successful Core approval result to its wire representation.</summary>
-    public static ApprovalResponse FromCore(ApprovalIssueResult result)
+    /// <summary>Maps a stored approval to its wire representation.</summary>
+    public static ApprovalResponse FromCore(ApprovalRecord approval)
     {
-        if (result.Outcome is not ApprovalIssueOutcome.Issued)
-        {
-            throw new ArgumentException("Only an issued approval has a success response.", nameof(result));
-        }
+        ArgumentNullException.ThrowIfNull(approval);
 
         return new ApprovalResponse(
-            result.ApprovalId ?? throw MissingBinding(nameof(result.ApprovalId)),
-            result.ApproverUserId ?? throw MissingBinding(nameof(result.ApproverUserId)),
-            result.VendorId ?? throw MissingBinding(nameof(result.VendorId)),
-            ActionName(result.RequestedAction),
-            result.EvidenceSetHash ?? throw MissingBinding(nameof(result.EvidenceSetHash)),
-            result.IssuedAtUtc ?? throw MissingBinding(nameof(result.IssuedAtUtc)),
-            result.ExpiresAtUtc ?? throw MissingBinding(nameof(result.ExpiresAtUtc)),
-            result.RiskPolicyVersion ?? throw MissingBinding(nameof(result.RiskPolicyVersion)));
+            approval.ApprovalId,
+            approval.TenantId,
+            approval.VendorId,
+            JsonNamingPolicy.CamelCase.ConvertName(approval.Action.ToString()),
+            approval.ApproverUserId,
+            approval.EvidenceSetHash,
+            approval.IssuedAtUtc,
+            approval.ExpiresAtUtc);
     }
-
-    private static InvalidOperationException MissingBinding(string field) =>
-        new($"An issued approval did not contain {field}.");
-
-    private static string ActionName(WorkflowAction action) =>
-        action is not WorkflowAction.Unknown && Enum.IsDefined(action)
-            ? JsonNamingPolicy.CamelCase.ConvertName(action.ToString())
-            : throw MissingBinding(nameof(ApprovalIssueResult.RequestedAction));
 }

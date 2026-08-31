@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
-using RegulatedAIWorkflow.Core.Domain.Approval;
+using RegulatedAIWorkflow.Core.Contracts.Approval;
 using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Infrastructure.Approval;
 
-/// <summary>
-/// Provides thread-safe tenant-scoped approval storage for the in-memory workflow slice.
-/// </summary>
+/// <summary>Tenant-scoped approval storage. The tenant is part of the key, so a lookup cannot cross tenants.</summary>
 public sealed class InMemoryApprovalRepository : IApprovalRepository
 {
     private readonly ConcurrentDictionary<ApprovalKey, ApprovalRecord> approvals = new();

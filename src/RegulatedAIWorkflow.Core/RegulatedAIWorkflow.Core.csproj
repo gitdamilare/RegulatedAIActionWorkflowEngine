@@ -2,4 +2,9 @@
   <PropertyGroup>
     <RootNamespace>RegulatedAIWorkflow.Core</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Risk rules are an implementation detail of the evaluator, and are tested directly. -->
+    <InternalsVisibleTo Include="RegulatedAIWorkflow.Tests" />
+  </ItemGroup>
 </Project>
