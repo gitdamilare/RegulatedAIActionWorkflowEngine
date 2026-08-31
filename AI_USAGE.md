@@ -10,11 +10,11 @@ test and was roughly twice the size it should have been. Then I over-corrected. 
 | | First version (`f249d21`) | After the cut | Now |
 |---|---:|---:|---:|
 | Production files | 75 | 50 | 53 |
-| Production lines | 2,893 | 1,859 | 2,161 |
+| Production lines | 2,893 | 1,859 | 2,167 |
 | Top-level types | 82 | 63 | 65 |
 | Orchestrator | 415 | 171 | 195 |
-| Test methods / cases | 83 / 115 | 29 / 56 | 53 / 99 |
-| Test lines | 3,027 | 997 | 1,634 |
+| Test methods / cases | 83 / 115 | 29 / 56 | 54 / 100 |
+| Test lines | 3,027 | 997 | 1,684 |
 
 The middle column is not the low-water mark either: the first cut went to 38 files and 1,561 lines and
 deleted the ceremony *and* some of the design with it. Collapsing `IRiskRule` and its rule classes into one
@@ -46,7 +46,7 @@ both with `403`. It now returns a named outcome, like the gate beside it already
 
 ## Proving the tests bite
 
-A test that has never been observed failing is not yet evidence, and "99 tests pass" is a volume claim. So
+A test that has never been observed failing is not yet evidence, and "100 tests pass" is a volume claim. So
 every load-bearing guard was deliberately broken, the full suite re-run, and the result recorded: mutate
 one guard, build, run `dotnet test`, record the failures, restore the file. None of these are predictions.
 
@@ -59,8 +59,15 @@ one guard, build, run `dotnet test`, record the failures, restore the file. None
 | Audit-before-effect ordering, by moving the attempt write after the executor | 2 failed | `Required_3_AuditTrailTests` |
 | The unknown-outcome distinction, recording a post-dispatch failure as `Failed` | 1 failed | `Required_3_AuditTrailTests` |
 | The fail-closed citation guard, restored to a silent filter | 2 failed | `CitationProvenanceTests` |
+| That guard's HTTP status mapping | 1 failed | `WorkflowApiTests` |
 | A prose field on `RiskEvaluationInput`, read by nothing | 1 failed | `RiskInputContractTests` |
 | **The entire injection scanner** | 7 failed, **all four `Required_4` cases still pass** | `InjectionDetectionTests` only |
+
+The citation guard's mapping row is there because reviewing the two ends of that path against each other
+found a real defect: Core returned `BlockedEvidenceUnavailable`, the response DTO mapped it, and the status
+switch did not, so the guard fired, the audit event was written, and the caller received an unhandled
+exception instead of the result. It was invisible because the guard was proved in Core and the wire
+mapping was proved at the API, and no test crossed the two. It is now asserted over HTTP.
 
 Two rows caught nothing on the first run, which is why they exist now: removing the Core-side scope
 re-assertion and moving the audit write after the executor both originally failed zero tests, though the
@@ -74,7 +81,7 @@ no route into a decision in the first place. Widening the contract is the real a
 which is the row above it: an optional prose parameter read by nothing fails `RiskInputContractTests`
 immediately. The guard fires when the attack surface appears, not when it is used.
 
-Every mutation was reverted, and the suite returns to 99 passing.
+Every mutation was reverted, and the suite returns to 100 passing.
 
 ## Representative prompts
 
@@ -105,9 +112,9 @@ the same trap as a blanket "regulated data" floor rule. The scanner reports; it 
 I also rejected AI's proposal to keep the four-project split "for extensibility." It stays for one reason:
 `Core` cannot reference ASP.NET or Infrastructure, and the project references make that a compile error.
 
-Verified 2026-08-31 on this tree: `dotnet build` 0 warnings, `dotnet test` 99/99, `dotnet format
+Verified 2026-08-31 on this tree: `dotnet build` 0 warnings, `dotnet test` 100/100, `dotnet format
 --verify-no-changes` clean, and the full `RegulatedAIWorkflow.Api.http` sequence replayed by hand.
 
-**Honest note on the time-box.** This is a 30-minute exercise with a 1-hour cap, and 2,161 lines with four
+**Honest note on the time-box.** This is a 30-minute exercise with a 1-hour cap, and 2,167 lines with four
 documents is more than anyone writes unaided in an hour. AI made the first draft fast. The time that
 actually mattered went on deleting half of it, and then measuring which of what remained was load-bearing.

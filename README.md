@@ -258,7 +258,7 @@ genuinely unknown vendor, because a `403` would confirm the vendor exists in ano
 
 ## Tests
 
-99 cases in 53 methods across [16 files](tests/RegulatedAIWorkflow.Tests), named for the brief's failure
+100 cases in 54 methods across [16 files](tests/RegulatedAIWorkflow.Tests), named for the brief's failure
 modes: [tenant isolation](tests/RegulatedAIWorkflow.Tests/Required/Required_1_TenantIsolationTests.cs),
 [approval gate](tests/RegulatedAIWorkflow.Tests/Required/Required_2_ApprovalGateTests.cs),
 [audit trail](tests/RegulatedAIWorkflow.Tests/Required/Required_3_AuditTrailTests.cs),
@@ -298,5 +298,5 @@ Top three risks and mitigations: [THREAT_NOTES.md](THREAT_NOTES.md).
 ---
 
 *Prototype boundary: every adapter is in-memory, identity is asserted rather than authenticated, no model is
-called at runtime. 53 source files, 2,161 lines. Verified 2026-08-31: build 0 warnings, 99/99 tests
+called at runtime. 53 source files, 2,167 lines. Verified 2026-08-31: build 0 warnings, 100/100 tests
 passing, `dotnet format` clean.*

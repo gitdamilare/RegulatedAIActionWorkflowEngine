@@ -2,6 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using RegulatedAIWorkflow.Core.Domain.Risk;
+using RegulatedAIWorkflow.Core.Ports;
 
 namespace RegulatedAIWorkflow.Tests.Api;
 
@@ -93,6 +98,51 @@ public sealed class WorkflowApiTests
             new { vendorId = Harness.Vendor, requestedAction = "markVendorApproved" });
 
         response.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
+    /// <summary>
+    /// Every status Core can return needs a wire mapping. This one is reachable only through a risk
+    /// evaluator that disagrees with retrieval, which the shipped evaluator never does, so it was mapped
+    /// in the response DTO and missed in the status switch: the guard fired, the audit event was written,
+    /// and the caller got an unhandled exception instead of the result. Asserted over HTTP because that is
+    /// the layer where the two mappings can disagree.
+    /// </summary>
+    [Fact]
+    public async Task PostWorkflowsRun_AssessmentCitesUnretrievedEvidence_ReportsAServerFaultWithTheRunRetained()
+    {
+        var disagrees = new StubRiskEvaluator(new RiskEvaluation(
+            RiskLevel.High,
+            "Do not approve yet.",
+            [new RiskReason("TEST_REASON", "A reason.")],
+            [],
+            ["document-that-was-never-retrieved"],
+            RequiresApproval: false));
+
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IRiskEvaluator>();
+                services.AddSingleton<IRiskEvaluator>(disagrees);
+            }));
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(Request(
+            "/workflows/run",
+            Harness.Requester,
+            "ProcurementManager",
+            new { vendorId = Harness.Vendor, requestedAction = "markVendorApproved" }));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.InternalServerError);
+
+        // The body survives, so the run stays traceable to the audit events already written for it.
+        var body = await Read(response);
+        body.GetProperty("actionStatus").GetString().ShouldBe("blocked_evidence_unavailable");
+        body.GetProperty("riskLevel").GetString().ShouldBe("unknown");
+        body.GetProperty("auditEventIds").GetArrayLength().ShouldBe(2);
+
+        // Nothing was established, so nothing is disclosed.
+        body.GetProperty("citations").GetArrayLength().ShouldBe(0);
+        body.GetProperty("reasons").GetArrayLength().ShouldBe(0);
     }
 
     private static HttpRequestMessage Request(string path, string userId, string role, object body) =>
