@@ -14,7 +14,9 @@ public sealed record ApprovalResponse(
     string VendorId,
     string RequestedAction,
     string ApproverUserId,
-    DateTimeOffset IssuedAtUtc)
+    string EvidenceSetHash,
+    DateTimeOffset IssuedAtUtc,
+    DateTimeOffset ExpiresAtUtc)
 {
     /// <summary>Maps a stored approval to its wire representation.</summary>
     public static ApprovalResponse FromCore(ApprovalRecord approval)
@@ -27,6 +29,8 @@ public sealed record ApprovalResponse(
             approval.VendorId,
             JsonNamingPolicy.CamelCase.ConvertName(approval.Action.ToString()),
             approval.ApproverUserId,
-            approval.IssuedAtUtc);
+            approval.EvidenceSetHash,
+            approval.IssuedAtUtc,
+            approval.ExpiresAtUtc);
     }
 }

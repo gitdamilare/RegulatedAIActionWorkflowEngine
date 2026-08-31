@@ -1,4 +1,5 @@
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Api.Dtos;
@@ -23,7 +24,8 @@ public sealed record WorkflowResponse(
     IReadOnlyList<MissingEvidenceItem> MissingEvidence,
     bool RequiresApproval,
     string ActionStatus,
-    IReadOnlyList<Guid> AuditEventIds)
+    IReadOnlyList<Guid> AuditEventIds,
+    IReadOnlyList<QuarantineNote> Warnings)
 {
     /// <summary>Maps a framework-independent Core result to its wire representation.</summary>
     public static WorkflowResponse FromCore(WorkflowRunResult result)
@@ -50,10 +52,12 @@ public sealed record WorkflowResponse(
                 Core.Contracts.Workflow.ActionStatus.BlockedInvalidRequest => "blocked_invalid_request",
                 Core.Contracts.Workflow.ActionStatus.BlockedUnauthorized => "blocked_unauthorized",
                 Core.Contracts.Workflow.ActionStatus.DeniedUnknownSubject => "denied_unknown_subject",
+                Core.Contracts.Workflow.ActionStatus.BlockedEvidenceUnavailable => "blocked_evidence_unavailable",
                 Core.Contracts.Workflow.ActionStatus.BlockedPendingApproval => "blocked_pending_approval",
                 Core.Contracts.Workflow.ActionStatus.Executed => "executed",
                 _ => throw new ArgumentOutOfRangeException(nameof(result))
             },
-            result.AuditEventIds);
+            result.AuditEventIds,
+            result.Warnings);
     }
 }

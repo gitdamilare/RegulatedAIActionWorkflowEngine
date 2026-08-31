@@ -5,6 +5,7 @@
 @approver = risk-approver
 @vendor = silverline-payments
 @tenantAOnlyVendor = lakeshore-analytics
+@lowRiskVendor = brightpath-print
 
 ### Liveness
 GET {{baseUrl}}/health
@@ -26,7 +27,9 @@ X-User-Role: ProcurementManager
 }
 
 ### 2. A different human records an approval.
-# Expect 201. The server mints the id and binds tenant, vendor, action, and approver.
+# Expect 201. The server mints the id and binds tenant, vendor, action, approver, a hash of the
+# evidence set it retrieves for itself, and a 24-hour window. Note evidenceSetHash in the response:
+# if any document for this vendor changed, that value changes and the approval stops authorizing.
 # @name issueApproval
 POST {{baseUrl}}/approvals
 Content-Type: application/json
@@ -130,4 +133,33 @@ X-User-Role: RiskApprover
 {
   "vendorId": "",
   "requestedAction": "markVendorApproved"
+}
+
+### 10. The other registered action, against a vendor that touches no regulated data.
+# Expect 200, riskLevel low, executed. No rule fires and requestVendorEvidence has no baseline,
+# so this is the low end of the vocabulary reached through the API rather than a unit test.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+X-Tenant-Id: {{tenant}}
+X-User-Id: {{requester}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{lowRiskVendor}}",
+  "requestedAction": "requestVendorEvidence"
+}
+
+### 11. The same action against the evidence that blocks request 1.
+# Expect 200, riskLevel high, and actionStatus executed with no approval. The threshold belongs to
+# the action, not to the level: asking a vendor for a missing document is reversible, so a high
+# assessment does not stop it. Compare request 1, blocked on exactly this evidence.
+POST {{baseUrl}}/workflows/run
+Content-Type: application/json
+X-Tenant-Id: {{tenant}}
+X-User-Id: {{requester}}
+X-User-Role: ProcurementManager
+
+{
+  "vendorId": "{{vendor}}",
+  "requestedAction": "requestVendorEvidence"
 }
