@@ -1,92 +1,113 @@
-# AI usage
-
-## What the leveler levels, and what it doesn't
-
+# AI Usage
 AI is a leveler. It collapsed the time it took me to reach the working vocabulary of regulated vendor onboarding: what a control attestation is, why separation of duties is stated the way it is, what an auditor expects a trail to prove. Days of reading became an afternoon of asking. It did the same for planning and architecture, where the useful output was not just code but a fast, arguable second opinion on where this problem's trust boundaries actually sit.
+**Tools.** OpenAI Codex, recorded as Codex Sol 5.6, used for planning, scoped C# drafts, tests, documentation, repository inspection, and verification.
 
-What it does not level is which of those controls are load-bearing *here*, and whether a given piece of generated code is true. That judgment is the job. The rest of this document is the evidence of where I applied it: what I refused to delegate, where the AI was confidently wrong, and how I checked that the tests defending this system actually work rather than merely pass.
+## What AI got wrong
 
-## Disclosure
+AI is very good at satisfying a brief and very bad at stopping. The first version passed every required
+test and was roughly twice the size it should have been. Then I over-corrected. Measured:
 
-- **Tool:** OpenAI Codex, recorded as Codex Sol 5.6, used for planning, scoped C# drafts, tests, documentation, repository inspection, and verification.
-- **Runtime:** The application contains no model call, prompt template, embedding service, or probabilistic decision path. Runtime policy is deterministic C# over server-selected actions and typed facts.
-- **Authority:** AI could edit and verify the working tree but was not authorized to stage, commit, push, publish, or decide which changes entered history.
+| | First version (`f249d21`) | After the cut | Now |
+|---|---:|---:|---:|
+| Production files | 75 | 50 | 53 |
+| Production lines | 2,893 | 1,859 | 2,161 |
+| Top-level types | 82 | 63 | 65 |
+| Orchestrator | 415 | 171 | 195 |
+| Test methods / cases | 83 / 115 | 29 / 56 | 53 / 99 |
+| Test lines | 3,027 | 997 | 1,634 |
 
-## What I did not delegate
+The middle column is not the low-water mark either: the first cut went to 38 files and 1,561 lines and
+deleted the ceremony *and* some of the design with it. Collapsing `IRiskRule` and its rule classes into one
+evaluator hid a modelling error I only saw once they were separate again: payment-data scope and
+sensitive-data scope had become an `if`/`else`, so a vendor in both scopes reported only the first.
 
-- **The injection boundary.** `RiskEvaluationInput` carries an action, typed facts, and a scope flag. It has no prose field. That absence is the control, and I wanted to be able to defend every part of why.
-- **Server-computed evidence binding.** An approver must not be able to approve against a set of facts nobody looked at, so the evidence hash is computed by the server at issuance and re-compared at use.
-- **Indistinguishable denial.** A cross-tenant subject and an unknown subject return the same response. That is a deliberate choice to avoid a tenant-enumeration oracle, and it cost some diagnostic friendliness.
+Rejected, and why:
 
-## Design decisions I made against the AI's first proposal
+- **The orchestrator as a state machine.** Ten numbered stages in one method read top to bottom; a state
+  machine adds indirection without adding a state anything else observes.
+- **An older target framework.** AI defaulted to a pre-net10 TFM and the API shapes that go with it. This
+  targets `net10.0` pinned by `global.json`, and uses `Convert.ToHexStringLower`, `FrozenDictionary`,
+  `GeneratedRegex` and `TimeProvider` directly.
+- **Approver identity from the request body.** An approval is never a caller-supplied `approvedBy`.
+  Identity comes from the principal, and only a stored record fetched by `(tenantId, approvalId)` counts.
+- **An over-defensive first approval design.** More binding than this slice needed, so I cut it, then
+  restored the evidence-set hash and the validity window once `TransformingEvidenceRepository` made them
+  falsifiable rather than decorative.
+- **The idempotency filter.** 129 lines plus a 279-line test suite for a 60-minute in-process cache
+  surviving neither a restart nor a second instance. Answered in `PRODUCTION_NOTES.md` instead.
+- **The policy-version registry.** An ordered rule set earns its keep; a version string that is the same
+  constant on every record does not.
 
-These are the ones that changed the shape of the solution.
-
-1. **The orchestrator as a state machine: rejected.** I asked whether it should be one. A run here is linear, synchronous, and single-call with no suspension point, so a state machine buys ceremony rather than safety. What *is* stateful is the approval, issued in one call and presented in a later one, and that split became the architecture. [WorkflowOrchestrator.cs](src/RegulatedAIWorkflow.Core/Application/Workflow/WorkflowOrchestrator.cs) is a numbered straight line for that reason.
-
-2. **Target framework.** The first proposal targeted .NET 8 for reviewer compatibility. I required .NET 10; [global.json](global.json) pins the feature band and [Directory.Build.props](Directory.Build.props) adds `TreatWarningsAsErrors`. That strictness is load-bearing, not cosmetic: it is what failed the compile on an unread parameter during the mutation runs above.
-
-3. **Approver identity comes from the principal, never a request-body name.** An `"approverName"` field was proposed. A name proves neither authentication nor authorization, and is not a stable identifier for separation of duties: two people can share a display name and one person can change theirs. `ApprovalIssuer` copies identity and role from `WorkflowPrincipal`; `ApprovalGate` compares stable user IDs ordinally.
-
-4. **The first approval design was more defensive than this slice needed, and I cut it.** Out went a malformed-record state machine, extra metadata projection, structural hash markers, and citation verification duplicated at issuance. Kept: every check protecting a real boundary, including the tenant recheck, policy compared before the policy-bound hash, not-yet-valid detection, and explicit audit ordering. Defensive machinery needs a boundary or an invariant to justify it.
+Two real defects I found by hand rather than by prompt. The deleted `IdempotencyFilter` called `.Single()`
+on a header collection, throwing instead of returning `400` when a client sent the header twice; fixed in
+`16ddf73`, and deleting the file was the better fix. And `ApprovalIssuer` returned `ApprovalRecord?`, so a
+malformed `vendorId` and a role that may not approve arrived as the same `null` and the endpoint answered
+both with `403`. It now returns a named outcome, like the gate beside it already did.
 
 ## Proving the tests bite
 
-A test that has never been observed failing is not yet evidence. "115 tests pass" is a volume claim, so before submitting I broke each load-bearing guard, ran the full suite, recorded what caught it, and restored the guard. Those mutation experiments used the preceding 101-test baseline; three execution-outcome cases raised it to 104, eight sequential idempotency cases covering header validation, replay, conflict, scope isolation, retry, and secret absence raised it to 112, and three body-binding cases added after a review found an unbound-body 500 bring it to 115 passed, 0 failed, and 0 skipped.
+A test that has never been observed failing is not yet evidence, and "99 tests pass" is a volume claim. So
+every load-bearing guard was deliberately broken, the full suite re-run, and the result recorded: mutate
+one guard, build, run `dotnet test`, record the failures, restore the file. None of these are predictions.
 
-| Guard removed | Result |
-|---|---|
-| Core-side tenant/vendor filter in `EvidenceSecurity.EnforceScope` | 2 failed |
-| Both scope layers: Core check **and** the repository adapter filter | **18 failed** across 5 suites |
-| Every approval binding: action, vendor, policy version, evidence hash, validity window, self-approval, approver role | 7 failed |
-| Audit-before-effect ordering, by moving the attempt write after the executor call | 2 failed, both of them the ordering tests |
-| The unbound-body guard in `IdempotencyFilter`, restored to its original `.Single()` | 3 failed, all three the new body-binding cases |
-| **A prose field on `RiskEvaluationInput`** | **1 failed, before the field was ever read** |
-
-Two rows are worth explaining.
-
-**The first two together are the point of double enforcement.** Removing the Core-side scope check alone fails only 2 tests, because the repository adapter still filters independently. Removing both fails 18, spanning tenant isolation, risk evaluation, approval, and the repository suites. Neither layer is decoration, and the small number in the first row measures that rather than exposing a weakness. Worth noting honestly: the 18 includes the injection tests, which fail there because contaminated cross-tenant evidence changes the risk outcome, not because any injection succeeded.
-
-**The last row is the one I would most want to talk through.** Most submissions defend against prompt injection with a scanner, which is a control you have to keep believing in. This one has no scanner to disable, because prose has no path into the risk decision at all. To attack it you must first widen the contract, so I tried: I added an *optional* `UntrustedText?` parameter defaulted to null, changed no call site, and altered no behaviour. [ArchitectureBoundaryTests.EvaluateRisk_RiskInputContract_AcceptsOnlyActionAndScopedTypedFacts](tests/RegulatedAIWorkflow.Tests/Architecture/ArchitectureBoundaryTests.cs#L36) failed immediately. The guard fires when the attack surface appears, not when it is used. That is why all three `Required_4_PromptInjectionTests` pass for a structural reason rather than a screening one.
-
-One incidental finding: while stubbing the approval gate, the strict build settings failed the compile on an unread `timeProvider` parameter. The build itself is part of the guard set.
-
-Every mutation was reverted. `git diff HEAD -- src tests` is empty.
-
-## Where AI was wrong, and what changed
-
-AI output was treated as a draft, not as evidence. These are the corrections that materially changed the solution or its documentation.
-
-| Weak AI proposal | Correction and lesson | Evidence |
+| Guard removed | Result | Caught by |
 |---|---|---|
-| The HTTP boundary was over-engineered: duplicated wire enums, a large mapper, manual JSON handling. | Reduced to small DTOs, header binding, explicit status mapping, real-host tests. Validation belongs at real trust boundaries, not wherever abstraction is possible. | [WorkflowDtos.cs](src/RegulatedAIWorkflow.Api/Dtos/WorkflowDtos.cs), `3ca0b50` |
-| An approval was called "independent" at the moment it was recorded. | Independence is established when a requester later presents the approval and Core compares requester against approver. Name the exact point a property is enforced. | `ApprovalGate` self-approval branch, [Required_2_ApprovalGateTests.cs](tests/RegulatedAIWorkflow.Tests/Required/Required_2_ApprovalGateTests.cs) |
-| The HTTP sequence was written as though an approval targeted the earlier blocked workflow. | Approval is reusable scope authorization bound to tenant, vendor, action, evidence, policy, approver, and time. No `workflowId` reaches the gate. Do not invent a lifecycle the code does not contain. | `ApprovalGate` binding checks, `9e729dd` |
-| A replay and exactly-once example was proposed before any idempotency mechanism existed. | The exactly-once claim was removed. A later endpoint-filter implementation, adapted from the user-supplied Milan Jovanović article, now supports one-hour sequential replay while explicitly retaining the article's check-then-set race as a production threat. | [PRODUCTION_NOTES.md](PRODUCTION_NOTES.md) idempotency section, [THREAT_NOTES.md](THREAT_NOTES.md) |
-| The idempotency endpoint filter read its bound body with `context.Arguments.OfType<WorkflowRequest>().Single()`. | A `null` or empty JSON body binds to nothing, so `Single()` threw and `/workflows/run` returned an unhandled 500 where both the documented contract and the unfiltered `/approvals` route return a 400 Problem Details. The filter now defers an unbound body to the framework binding-failure path. A filter must not assume the argument it exists to inspect was bound. | [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs), the `BindingFailureBodies` null and empty cases, and [WorkflowIdempotencyTests.cs](tests/RegulatedAIWorkflow.Tests/Api/WorkflowIdempotencyTests.cs) |
+| Core-side scope re-assertion in the orchestrator | 2 failed | `Required_1_TenantIsolationTests` |
+| **Both** scope layers: the Core check *and* the adapter filter | **26 failed** across 7 classes | tenant isolation, approval, audit, risk, API |
+| The evidence-set binding check in `ApprovalGate` | 4 failed | `Required_2_ApprovalGateTests` |
+| The approval validity-window check | 1 failed | `Required_2_ApprovalGateTests` |
+| Audit-before-effect ordering, by moving the attempt write after the executor | 2 failed | `Required_3_AuditTrailTests` |
+| The unknown-outcome distinction, recording a post-dispatch failure as `Failed` | 1 failed | `Required_3_AuditTrailTests` |
+| The fail-closed citation guard, restored to a silent filter | 2 failed | `CitationProvenanceTests` |
+| A prose field on `RiskEvaluationInput`, read by nothing | 1 failed | `RiskInputContractTests` |
+| **The entire injection scanner** | 7 failed, **all four `Required_4` cases still pass** | `InjectionDetectionTests` only |
 
-**Residual risk.** The AI-drafted code carrying the least adversarial pressure is the in-memory infrastructure adapters and the DTO mapping layer, precisely because they are the parts scheduled for replacement in production. A defect hiding there would most likely be a mapping or fixture error rather than a control bypass, but I have not proved that, and it is where I would look first.
+Two rows caught nothing on the first run, which is why they exist now: removing the Core-side scope
+re-assertion and moving the audit write after the executor both originally failed zero tests, though the
+README claimed both prominently. `Required_1` now hands the orchestrator a repository returning
+out-of-scope content and requires it to throw, and `Required_3` asserts the ordering of audit writes
+against the effect. Running the mutations found that gap; reading the tests would not have.
 
-**Outcome.** A review then found exactly one such defect, and its kind matched this prediction while its location did not. `IdempotencyFilter` called `.Single()` on an argument list that is empty when the JSON body fails to bind, so an unbound body returned 500 instead of the documented 400. That is a robustness bug at the HTTP boundary rather than a control bypass, exactly the failure mode predicted above, but it sat in the newest hand-directed feature rather than in the adapters I had flagged as least examined. The correction I take from it is that recency of change predicts defect location better than my intuition about which code received the least adversarial pressure.
+The last row is the one I would most want to talk through. This has an injection scanner and it is
+deliberately not the control: delete the file and all four `Required_4` cases still pass, because prose has
+no route into a decision in the first place. Widening the contract is the real attack, so I tried that too,
+which is the row above it: an optional prose parameter read by nothing fails `RiskInputContractTests`
+immediately. The guard fires when the attack surface appears, not when it is used.
 
-## Verification
+Every mutation was reverted, and the suite returns to 99 passing.
 
-I required the assistant to run checks rather than describe them. As of 2026-08-26, in the working tree at `d003bc9` with the unbound-body fix applied: `dotnet build -c Release` gives 0 warnings and 0 errors, `dotnet test -c Release` gives 115 passed / 0 failed / 0 skipped, and `dotnet format --verify-no-changes` is clean. The six mutation experiments above were each reverted and re-verified.
+## Representative prompts
 
-An earlier milestone taught this the hard way: generated files carried CRLF endings against an `.editorconfig` requiring LF. Build and tests both passed and the formatting gate still failed. A successful compile is not a complete verification result, so every declared gate gets run.
+- *"Derive the minimum design from the brief, then decide what deserves to survive. Prefer deletion and
+  direct code over abstractions that are merely defensible in a production system."* This produced the
+  deletion plan, and also the overshoot. Making deletion the default surfaces the ceremony quickly, but it
+  scores an abstraction by its size rather than by what it carries.
+- *"For every mechanism you delete, name where its rubric value now lives: code, a test, or a specific doc
+  bullet."* This is what stopped the cut from removing protections along with the ceremony, and it is the
+  prompt I would keep unchanged.
+- *"Adding an unused optional prose parameter to the risk contract must fail a test."* This produced
+  `RiskInputContractTests`, the one architecture test I kept.
+- *"Break each guard one at a time and tell me which tests fail."* The most valuable prompt of the set, and
+  the last one I thought to write. It found the two undefended claims above.
 
-These tests are evidence for current single-process behaviour. This record does not convert a passing test into a claim of authenticated identity, durable audit, distributed exactly-once execution, encryption, or disaster recovery.
+## What I did not delegate, and what I verified
 
-## Effective prompt pattern
+The trust boundary is mine. The decision that `RiskEvaluationInput` carries no prose field, that identity
+comes from headers rather than the request body, that a cross-tenant subject must be indistinguishable from
+an unknown one, and that the injection scanner must have no path into a decision are the four choices this
+submission stands on, and none came from a prompt.
 
-The prompts that worked constrained authority as well as scope: implement only the named purpose, include the trust-boundary requirements and the tests proving each security claim, defer named later infrastructure, run build and tests and formatting, do not stage or commit, and report implemented behaviour separately from deliberate limitations. Naming what must *not* be built yet prevented more scope drift than any positive instruction.
+The last of those is where I disagreed with the obvious design. Feeding a quarantine flag into the risk
+input is what most implementations do, and it introduces a failure mode nobody tests for: a regex false
+positive then raises a compliant vendor's risk level, and no amount of evidence can discharge it. That is
+the same trap as a blanket "regulated data" floor rule. The scanner reports; it does not decide.
 
-## If a model is ever introduced here
+I also rejected AI's proposal to keep the four-project split "for extensibility." It stays for one reason:
+`Core` cannot reference ASP.NET or Infrastructure, and the project references make that a compile error.
 
-It could assist with retrieval, ranking, candidate fact extraction, or explanation drafting only if its output stays untrusted: tenant scoped, schema validated, provenance linked, versioned, evaluated. It must not establish identity, choose the action policy, convert prose into permission, lower risk without deterministic evidence rules, grant or impersonate approval, bypass citation verification, or reach the executor. Its provider, version, prompt template, evaluation corpus, red-team results, data handling, residency, and rollback would all need documenting, to the standard this file applies to itself above.
+Verified 2026-08-31 on this tree: `dotnet build` 0 warnings, `dotnet test` 99/99, `dotnet format
+--verify-no-changes` clean, and the full `RegulatedAIWorkflow.Api.http` sequence replayed by hand.
 
-## Where AI helped most, and least
-
-Most: mechanical breadth. 115 tests and four documents inside a sensible window would not have happened by hand, and the edge-case coverage is directly attributable to that speed.
-
-Least: judgment about what is actually true. The over-engineered HTTP boundary and the proposed replay example share a shape with every correction in the table above. Each was locally plausible, internally consistent, and globally wrong, visible only to someone who already knew what the system was supposed to mean. That is an argument for this architecture rather than against the tool: the parts that decide things are small, deterministic, and readable in one sitting, because that is the part a reviewer, an auditor, and I all have to check by hand.
+**Honest note on the time-box.** This is a 30-minute exercise with a 1-hour cap, and 2,161 lines with four
+documents is more than anyone writes unaided in an hour. AI made the first draft fast. The time that
+actually mattered went on deleting half of it, and then measuring which of what remained was load-bearing.

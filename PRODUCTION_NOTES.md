@@ -1,38 +1,24 @@
 # Production Notes
 
-This repository is a single-process prototype. The application ports and deterministic Core behavior are useful seams, but none of the production controls below are implemented.
+What this prototype demonstrates, and what a real deployment needs. Nothing in the "Production" column is
+implemented; the point of the table is that each gap has a named owner rather than being an oversight.
 
-## Prototype-to-production map
+## Prototype to production
 
-Each row names the file that becomes production work.
-
-| Concern | Prototype | Production replacement |
+| Concern | Demonstrated here | Production |
 |---|---|---|
-| Authentication | [IdentityHeaderBinder.cs](src/RegulatedAIWorkflow.Api/Identity/IdentityHeaderBinder.cs) shape-checks three identity headers | Validate OIDC/OAuth tokens or workload identities at the same seam; derive tenant, subject, and roles only from issuer-controlled claims |
-| Authorization | Deny-by-default matrix in [ActionAuthorizationPolicy.cs](src/RegulatedAIWorkflow.Core/Application/ActionAuthorizationPolicy.cs), before retrieval | Check live tenant membership and entitlement before retrieval, approval, and execution; require step-up authentication for approval; preserve the initiating human identity across service calls so a privileged workload cannot substitute its own authority |
-| Tenant isolation | Adapter filtering plus Core re-scoping in [EvidenceSecurity.cs:17](src/RegulatedAIWorkflow.Core/Application/EvidenceSecurity.cs#L17) | Tenant-bearing keys, mandatory predicates, row-level security or separate stores, and tenant-aware caches, indexes, exports, and backups; a restore into the wrong tenant is still a breach |
-| Evidence | Seeded corpus in [InMemoryEvidenceRepository.cs](src/RegulatedAIWorkflow.Infrastructure/Evidence/InMemoryEvidenceRepository.cs) | Authorized ingestion, immutable versions, content hashes, source spans, extraction version, confidence, and human review of material facts |
-| Approvals | Unsigned process memory in [InMemoryApprovalRepository.cs](src/RegulatedAIWorkflow.Infrastructure/Approval/InMemoryApprovalRepository.cs) | Durable pending/approved/rejected/revoked/consumed lifecycle with authenticated approver, reason, expiry, and live entitlement checks |
-| Execution | [InMemoryActionExecutor.cs](src/RegulatedAIWorkflow.Infrastructure/Execution/InMemoryActionExecutor.cs) records the request and reports success | Durable operation state, transactional outbox, stable downstream idempotency token, and reconciliation of unknown outcomes |
-| Idempotency | [IdempotencyFilter.cs](src/RegulatedAIWorkflow.Api/Idempotency/IdempotencyFilter.cs) replays sequential successes for one hour, process-local | Atomic tenant-scoped claim with a unique constraint, request fingerprint, lease/state, durable response, and cross-instance coordination |
-| Audit | `ConcurrentQueue` in [InMemoryAuditSink.cs](src/RegulatedAIWorkflow.Infrastructure/Audit/InMemoryAuditSink.cs) | Append-only access-controlled storage, integrity links or signatures, external checkpoints, retention locks, and independent monitoring |
-| Observability | [Program.cs:44](src/RegulatedAIWorkflow.Api/Program.cs#L44) returns a static literal | OpenTelemetry traces, metrics, structured logs, readiness that fails when audit or identity dependencies are unusable, dashboards, and alerts without raw questions, evidence, tokens, or keys |
-| Rate limiting | None | Tenant/principal cost budgets, concurrency and body limits, bounded queues, timeouts, and `429` responses without cross-tenant leakage |
-| Policy governance | One version selected at [RiskPolicies.cs:13](src/RegulatedAIWorkflow.Core/Application/Risk/RiskPolicies.cs#L13) and recorded on every decision | Governed registry with immutable versions, golden/adverse cases, shadow evaluation, staged rollout, decision-delta review, and rollback |
-| Legal/compliance | No retention or privacy workflow | Data classification, lawful basis, residency, retention, deletion, legal hold, access review, evidence preservation, and approved control owners |
-| Recovery | In-memory singletons at [Program.cs:29-33](src/RegulatedAIWorkflow.Api/Program.cs#L29-L33), so restart loses state | Encrypted backups, point-in-time restore, RPO/RTO, restore testing, reconciliation, and incident runbooks |
-
-## Safe execution and retries
-
-A database transaction cannot normally include an external vendor API. [WorkflowOrchestrator.cs:207-221](src/RegulatedAIWorkflow.Core/Application/Workflow/WorkflowOrchestrator.cs#L207-L221) writes the authorization event before calling the executor, but as separate in-memory operations. Production should use this sequence:
-
-1. In one local transaction, revalidate authorization and approval, atomically claim the operation, record execution intent, and insert an outbox message.
-2. A worker sends the effect with a stable downstream idempotency token.
-3. Persist `Succeeded`, `Failed`, or `Unknown` and append the corresponding audit event.
-4. Reconcile `Unknown` with the downstream system before retrying.
-5. Return a durable operation resource for work that cannot complete within one HTTP request.
-
-Retry only classified transient failures with bounded exponential backoff and jitter. Treat a timeout after dispatch as `Unknown`, not `Failed`, until reconciliation proves whether the effect happened, and do not report success to the caller before the required durable state exists. Compensation is domain-specific and may be impossible for an irreversible action, so the design must prefer preventing duplicate or unauthorized work over assuming a rollback exists. Do not claim exactly-once; the defensible guarantee is durable deduplication, downstream cooperation where available, and reconciliation.
+| Authentication | `X-Tenant-Id` / `X-User-Id` / `X-User-Role`, shape-validated, **not authenticated** | OIDC; tenant and role from validated token claims, never from a header. `IdentityHeaderBinder` is the only file that changes. |
+| Authorization | Deny-by-default role sets per action in `WorkflowActionPolicies`, checked before retrieval | Same shape, sourced from an entitlements service with its own audit trail and change approval. A service identity must never exceed the human it acts for. |
+| Tenant isolation | Tenant is a parameter of the evidence query; Core re-asserts scope and throws on violation | Row-level security or per-tenant schemas, so isolation survives a query someone writes later. Partition the retrieval index and every cache key by tenant. Keep the Core assertion as defence in depth. |
+| Evidence store | In-memory corpus, 2 tenants, 3 vendors, 9 documents | Document store plus a retrieval index. Tenant is a partition key, never a `WHERE` clause added by convention. |
+| Evidence ingestion | Fact types are hand-assigned in the seed data | The highest-risk component: a pipeline that extracts typed facts from documents, records provenance and a confidence, and routes low-confidence extractions to human review. Facts are server-owned; a vendor never writes one. |
+| Risk policy | One deterministic evaluator over an ordered rule set, no model call | Same determinism, plus a version string recorded on every audit event and bound into the approval hash, so a policy change invalidates outstanding approvals and a decision stays explainable under the rules in force when it was made. Ship rule changes through shadow evaluation first. If an LLM is added it drafts *reasons*, never the level, and never sees an authorization decision. |
+| Approval | Stored record bound to tenant, vendor, action, approver, **evidence-set hash**, and a 24-hour window; requester ≠ approver | Add revocation, quorum for the highest-risk actions, and a signature over the record so the store itself is not trusted. Make the window policy per action rather than a constant. |
+| Audit | In-memory sink; exactly two structured events per run, attempt written before the effect | Append-only WORM storage with retention aligned to the regulator, hash-chained with the head anchored externally on a schedule so tampering is detectable rather than merely discouraged, and shipped to a SIEM. Audit-write failure must keep failing closed. |
+| Execution | Mock executor, records the request, changes nothing | Real vendor API behind a timeout, circuit breaker, and bulkhead. Failure throws; a timeout must never be reported as success or as clean failure. |
+| Observability | Audit events carry ids and codes only | Structured logs with a correlation id per workflow, traces spanning retrieval → evaluation → approval → effect, and the metrics below. Never log a snippet or a question. |
+| Rate limiting | None | Partition by tenant, meter by cost (retrieval and any model call), and fail closed on the regulated endpoint. |
+| Legal and compliance | Prototype boundary documented | Data residency per tenant; retention and deletion that must not break the audit chain; DPIA and EU AI Act high-risk assessment for automated decisioning; evidence of separation of duties for the auditor. |
 
 ## Rate limiting and cost control
 
@@ -45,6 +31,23 @@ The deterministic evaluator costs effectively nothing. Cost concentrates in the 
 
 One rule constrains the rest: a rate limit must never cause an audit write to be dropped or deferred. Shedding load is acceptable; shedding the record of what was attempted is not. If the audit path is saturated, refuse the action rather than perform it unrecorded.
 
+## Duplicate prevention
+
+Duplicate prevention is the largest thing deliberately left out of the code:
+an in-process cache is not idempotency, because it survives neither a restart nor a second instance.
+
+The caller supplies a stable operation key, and the API claims it in the same transaction that records the
+intent, so a retry finds the existing claim and returns the recorded outcome instead of dispatching again.
+The intent row and an outbox entry commit together, and a worker dispatches from the outbox, passing that
+same key downstream so the vendor system can deduplicate on its own side. Every dispatch is recorded as
+Succeeded, Failed, or Unknown, and Unknown is never blindly retried; it is reconciled against the
+downstream system before the operation is closed.
+
+That is at-least-once delivery with downstream deduplication. Nothing can promise exactly-once across a
+network boundary, and any design claiming otherwise is hiding a reconciliation step. This prototype models
+the honest fragment: the attempt is audited before the effect, and a failure with the executor call
+outstanding is recorded as `ExecutionOutcomeUnknown` rather than `Failed`.
+
 ## Security and operations
 
 - Encrypt transport, databases, object storage, queues, indexes, exports, and backups; use KMS/HSM-backed envelope encryption where appropriate.
@@ -54,3 +57,15 @@ One rule constrains the rest: a rate limit must never cause an audit write to be
 - Alert on changes in decision quality as well as availability: a sudden fall in block rate or shift after a policy release can indicate a bad rollout while HTTP success rates look healthy.
 - Govern policy and future model releases through immutable versions, golden/adverse cases, shadow evaluation, staged rollout, decision-delta review, and rollback.
 
+## Where an LLM would actually go
+
+Not in this repository, and worth being precise about why. Three places it earns its keep, none of which
+touch an authorization decision:
+
+1. **Ingestion**, extracting typed facts from documents, with provenance, a confidence score, and human
+   review below a threshold. This is the highest-value and highest-risk use.
+2. **Drafting reason text** for a rule that has already fired. The code decides; the model phrases.
+3. **Summarising an audit trail** for a human investigator, read-only, over records that already exist.
+
+In all three the model produces data that deterministic code then validates. The moment a model's output
+becomes a control signal rather than data, every guarantee in `THREAT_NOTES.md` is void.
