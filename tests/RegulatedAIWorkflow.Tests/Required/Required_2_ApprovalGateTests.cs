@@ -1,5 +1,6 @@
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Tests.Required;
@@ -87,5 +88,90 @@ public sealed class Required_2_ApprovalGateTests
         result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
         harness.Executor.CallCount.ShouldBe(0);
         harness.Audit.Events.ShouldAllBe(auditEvent => auditEvent.ReasonCodes.Contains(expectedCode));
+    }
+
+    /// <summary>
+    /// An approval endorses one set of facts, not a vendor. If the evidence moves after the signature the
+    /// approval stops authorizing, because the assessment the approver read no longer describes reality.
+    /// </summary>
+    [Theory]
+    [InlineData("document-removed")]
+    [InlineData("document-added")]
+    [InlineData("fact-changed")]
+    [InlineData("snippet-edited")]
+    public async Task RunAsync_EvidenceChangedAfterApproval_ReportsSupersessionAndNeverCallsExecutor(string change)
+    {
+        var harness = new Harness();
+        var approval = await harness.IssueApprovalAsync();
+
+        var moved = new TransformingEvidenceRepository(documents => change switch
+        {
+            "document-removed" => documents.Skip(1).ToArray(),
+            "document-added" => documents
+                .Append(new EvidenceDocument(
+                    "northstar-silverline-addendum",
+                    Harness.TenantA,
+                    Harness.Vendor,
+                    EvidenceDocumentType.Contract,
+                    [EvidenceFactType.BreachNotificationPresent],
+                    UntrustedText.FromExternalSource("A late addendum nobody approved against.")))
+                .ToArray(),
+            "fact-changed" => documents
+                .Select((document, index) => index == 0
+                    ? document with { FactTypes = [EvidenceFactType.Soc2Available] }
+                    : document)
+                .ToArray(),
+            _ => documents
+                .Select((document, index) => index == 0
+                    ? document with
+                    {
+                        UntrustedSnippet = UntrustedText.FromExternalSource("Quietly replaced after sign-off.")
+                    }
+                    : document)
+                .ToArray()
+        });
+
+        var result = await harness.Orchestrator(moved).RunAsync(
+            Harness.Principal(),
+            Harness.Command(approvalId: approval.ApprovalId));
+
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        harness.Executor.CallCount.ShouldBe(0);
+        harness.Audit.Events.ShouldAllBe(auditEvent =>
+            auditEvent.ReasonCodes.Contains(WorkflowAuditCodes.ApprovalEvidenceSuperseded));
+    }
+
+    /// <summary>
+    /// A validity window that nothing enforces would be decoration. The clock is injected, so this is a
+    /// real check rather than a stored field.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ApprovalPastItsValidityWindow_ReportsExpiryAndNeverCallsExecutor()
+    {
+        var harness = new Harness();
+        var approval = await harness.IssueApprovalAsync();
+
+        var result = await harness.Orchestrator(at: approval.ExpiresAtUtc.AddSeconds(1)).RunAsync(
+            Harness.Principal(),
+            Harness.Command(approvalId: approval.ApprovalId));
+
+        result.ActionStatus.ShouldBe(ActionStatus.BlockedPendingApproval);
+        harness.Executor.CallCount.ShouldBe(0);
+        harness.Audit.Events.ShouldAllBe(auditEvent =>
+            auditEvent.ReasonCodes.Contains(WorkflowAuditCodes.ApprovalExpired));
+    }
+
+    [Fact]
+    public async Task RunAsync_ApprovalInsideItsValidityWindow_StillAuthorizes()
+    {
+        var harness = new Harness();
+        var approval = await harness.IssueApprovalAsync();
+
+        var result = await harness.Orchestrator(at: approval.ExpiresAtUtc.AddSeconds(-1)).RunAsync(
+            Harness.Principal(),
+            Harness.Command(approvalId: approval.ApprovalId));
+
+        result.ActionStatus.ShouldBe(ActionStatus.Executed);
+        harness.Executor.CallCount.ShouldBe(1);
     }
 }

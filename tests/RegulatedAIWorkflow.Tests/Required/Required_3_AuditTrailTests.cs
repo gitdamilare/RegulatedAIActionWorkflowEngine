@@ -106,4 +106,46 @@ public sealed class Required_3_AuditTrailTests
         // The exception itself is never recorded, only the structured outcome.
         JsonSerializer.Serialize(harness.Audit.Events).ShouldNotContain("timed out");
     }
+
+    /// <summary>
+    /// The ordering the whole design rests on: the attempt is on record before the effect can begin. A
+    /// trail written afterwards proves nothing, because the process can die in between and the effect
+    /// would then have happened with no record that it was even tried.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_Executed_WritesTheAttemptBeforeTheEffect()
+    {
+        var harness = new Harness();
+        var approval = await harness.IssueApprovalAsync();
+
+        await harness.Orchestrator().RunAsync(
+            Harness.Principal(),
+            Harness.Command(approvalId: approval.ApprovalId));
+
+        harness.Sequence.Entries.ShouldBe(
+        [
+            "audit:ActionAttempt:AuthorizedForExecution",
+            "execute",
+            "audit:WorkflowCompleted:Executed"
+        ]);
+    }
+
+    /// <summary>
+    /// If the pre-effect write fails, nothing runs. The audit trail is not a side channel that can be
+    /// dropped under pressure; it gates the effect.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_AuditWriteFails_DoesNotCallExecutor()
+    {
+        var harness = new Harness();
+        var approval = await harness.IssueApprovalAsync();
+        var failing = new FailingAuditSink(harness.Audit, failOnEventType: AuditEventType.ActionAttempt);
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            harness.Orchestrator(auditSink: failing).RunAsync(
+                Harness.Principal(),
+                Harness.Command(approvalId: approval.ApprovalId)));
+
+        harness.Executor.CallCount.ShouldBe(0);
+    }
 }

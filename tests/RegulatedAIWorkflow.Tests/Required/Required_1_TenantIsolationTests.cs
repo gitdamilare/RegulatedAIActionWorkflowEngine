@@ -65,4 +65,58 @@ public sealed class Required_1_TenantIsolationTests
     /// <summary>Everything a caller can observe, minus the two ids that legitimately differ per run.</summary>
     private static string Fingerprint(WorkflowRunResult result) =>
         JsonSerializer.Serialize(result with { WorkflowId = Guid.Empty, AuditEventIds = [] });
+
+    /// <summary>
+    /// The second layer, on its own. The adapter filters and Core re-checks the answer against the same
+    /// definition of scope, so this test deliberately hands the orchestrator a repository that lies.
+    /// Without it, removing the Core-side check would break no test and the "defence in depth" claim
+    /// would be an assertion about code nobody exercises.
+    /// </summary>
+    [Theory]
+    [InlineData("foreign-tenant")]
+    [InlineData("foreign-vendor")]
+    public async Task RunAsync_RepositoryReturnsOutOfScopeContent_FailsLoudlyAndNeverCallsExecutor(string leak)
+    {
+        var harness = new Harness();
+        var leaky = new TransformingEvidenceRepository(documents => documents
+            .Append(new EvidenceDocument(
+                "leaked-document",
+                leak == "foreign-tenant" ? Harness.TenantB : Harness.TenantA,
+                leak == "foreign-vendor" ? Harness.TenantAOnlyVendor : Harness.Vendor,
+                EvidenceDocumentType.Soc2Report,
+                [EvidenceFactType.Soc2Available],
+                UntrustedText.FromExternalSource("Evidence belonging to a scope that was never asked for.")))
+            .ToArray());
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            harness.Orchestrator(leaky).RunAsync(Harness.Principal(), Harness.Command()));
+
+        harness.Executor.CallCount.ShouldBe(0);
+    }
+
+    /// <summary>
+    /// The same distrust at approval time. An approval must never be bound to evidence the caller was
+    /// not entitled to see, so the issuer re-checks scope exactly as the orchestrator does.
+    /// </summary>
+    [Fact]
+    public async Task IssueAsync_RepositoryReturnsOutOfScopeContent_FailsLoudly()
+    {
+        var harness = new Harness();
+        var leaky = new TransformingEvidenceRepository(documents => documents
+            .Append(new EvidenceDocument(
+                "leaked-document",
+                Harness.TenantB,
+                Harness.Vendor,
+                EvidenceDocumentType.Soc2Report,
+                [EvidenceFactType.Soc2Available],
+                UntrustedText.FromExternalSource("Another tenant's attestation.")))
+            .ToArray());
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            harness.Issuer(leaky).IssueAsync(
+                new WorkflowPrincipal(Harness.TenantA, Harness.Approver, UserRole.RiskApprover),
+                Harness.Vendor,
+                WorkflowAction.MarkVendorApproved,
+                CancellationToken.None));
+    }
 }
