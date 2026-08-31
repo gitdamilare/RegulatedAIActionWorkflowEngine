@@ -1,5 +1,6 @@
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 using RegulatedAIWorkflow.Core.Ports;
 
@@ -32,6 +33,8 @@ internal sealed class WorkflowAuditRecorder(Guid workflowId, IAuditSink auditSin
 
     internal IReadOnlyList<string> ReasonCodes { get; set; } = [];
 
+    internal IReadOnlyList<QuarantineNote> Quarantined { get; set; } = [];
+
     internal string? ApprovalId { get; set; }
 
     internal string? ApproverUserId { get; set; }
@@ -54,6 +57,7 @@ internal sealed class WorkflowAuditRecorder(Guid workflowId, IAuditSink auditSin
                 outcome,
                 ReferencedDocumentIds,
                 ReasonCodes,
+                Quarantined,
                 ApprovalId,
                 ApproverUserId),
             CancellationToken.None);
