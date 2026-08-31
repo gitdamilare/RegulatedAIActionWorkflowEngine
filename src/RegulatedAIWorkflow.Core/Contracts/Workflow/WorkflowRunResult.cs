@@ -1,3 +1,4 @@
+using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Core.Contracts.Workflow;
@@ -12,15 +13,14 @@ public sealed record WorkflowRunResult(
     IReadOnlyList<MissingEvidenceItem> MissingEvidence,
     bool RequiresApproval,
     ActionStatus ActionStatus,
-    IReadOnlyList<Guid> AuditEventIds)
+    IReadOnlyList<Guid> AuditEventIds,
+    IReadOnlyList<QuarantineNote> Warnings)
 {
     private const string UnknownSubjectRecommendation = "No such subject in this tenant.";
-    private const string ApprovedRecommendation =
-        "Proceeded under recorded approval. The assessment remains high and any evidence gaps below are still outstanding.";
 
     /// <summary>A refusal that discloses nothing, because nothing was assessed.</summary>
     public static WorkflowRunResult Refused(Guid workflowId, ActionStatus status) =>
-        new(workflowId, RiskLevel.Unknown, string.Empty, [], [], [], RequiresApproval: false, status, []);
+        new(workflowId, RiskLevel.Unknown, string.Empty, [], [], [], RequiresApproval: false, status, [], []);
 
     /// <summary>
     /// The denial for a subject this tenant does not have. Deliberately identical whether the vendor
@@ -36,6 +36,7 @@ public sealed record WorkflowRunResult(
             [],
             RequiresApproval: false,
             ActionStatus.DeniedUnknownSubject,
+            [],
             []);
 
     /// <summary>
@@ -46,19 +47,26 @@ public sealed record WorkflowRunResult(
         Guid workflowId,
         RiskEvaluation evaluation,
         IReadOnlyList<Citation> citations,
-        ActionStatus status) =>
-        new(
+        ActionStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+
+        return new WorkflowRunResult(
             workflowId,
             evaluation.RiskLevel,
             status is ActionStatus.Executed && evaluation.RequiresApproval
-                ? ApprovedRecommendation
+                ? $"Proceeded under recorded approval. The assessment remains "
+                    + $"{evaluation.RiskLevel.ToString().ToLowerInvariant()} and any evidence gaps below are "
+                    + "still outstanding."
                 : evaluation.Recommendation,
             evaluation.Reasons,
             citations,
             evaluation.MissingEvidence,
             evaluation.RequiresApproval,
             status,
+            [],
             []);
+    }
 }
 
 /// <summary>
@@ -79,7 +87,10 @@ public enum ActionStatus
     /// <summary>No such subject in this tenant.</summary>
     DeniedUnknownSubject,
 
-    /// <summary>High risk with no matching recorded approval. The executor was not called.</summary>
+    /// <summary>An assessment cited evidence that was not retained.</summary>
+    BlockedEvidenceUnavailable,
+
+    /// <summary>Risk met the action's approval threshold with no matching approval. The executor was not called.</summary>
     BlockedPendingApproval,
 
     /// <summary>The action ran.</summary>

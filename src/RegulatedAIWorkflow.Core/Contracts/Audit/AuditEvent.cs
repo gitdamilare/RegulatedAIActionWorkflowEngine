@@ -1,4 +1,5 @@
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
+using RegulatedAIWorkflow.Core.Domain.Evidence;
 using RegulatedAIWorkflow.Core.Domain.Risk;
 
 namespace RegulatedAIWorkflow.Core.Contracts.Audit;
@@ -6,6 +7,8 @@ namespace RegulatedAIWorkflow.Core.Contracts.Audit;
 /// <summary>
 /// A workflow audit record. Every field is a server-owned identifier, enum, or code: there is no field
 /// a question, a snippet, or an exception message could occupy, so the audit trail cannot carry prose.
+/// That includes <c>Quarantined</c>, which names the rule that matched and fingerprints the content
+/// rather than storing the text that triggered it.
 /// </summary>
 public sealed record AuditEvent(
     Guid EventId,
@@ -21,6 +24,7 @@ public sealed record AuditEvent(
     AuditOutcome Outcome,
     IReadOnlyList<string> ReferencedDocumentIds,
     IReadOnlyList<string> ReasonCodes,
+    IReadOnlyList<QuarantineNote> Quarantined,
     string? ApprovalId,
     string? ApproverUserId);
 
@@ -49,7 +53,10 @@ public enum AuditOutcome
     /// <summary>No such subject in this tenant. Indistinguishable from a cross-tenant subject.</summary>
     DeniedUnknownSubject,
 
-    /// <summary>High risk with no matching recorded approval. The executor was not called.</summary>
+    /// <summary>An assessment cited evidence that was not retained, so the result was not trustworthy.</summary>
+    BlockedEvidenceUnavailable,
+
+    /// <summary>Risk met the action's approval threshold with no matching recorded approval. The executor was not called.</summary>
     BlockedPendingApproval,
 
     /// <summary>Every gate passed. Recorded before the effect.</summary>

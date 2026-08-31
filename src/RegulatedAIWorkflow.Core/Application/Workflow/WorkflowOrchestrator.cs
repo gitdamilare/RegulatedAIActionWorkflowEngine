@@ -1,4 +1,5 @@
 using RegulatedAIWorkflow.Core.Application.Approval;
+using RegulatedAIWorkflow.Core.Application.Evidence;
 using RegulatedAIWorkflow.Core.Contracts.Audit;
 using RegulatedAIWorkflow.Core.Contracts.Workflow;
 using RegulatedAIWorkflow.Core.Domain.Evidence;
@@ -89,7 +90,13 @@ public sealed class WorkflowOrchestrator(
                     AuditOutcome.DeniedUnknownSubject);
             }
 
-            // 5. Evaluate typed facts only. Snippet prose has no representation in the input type.
+            // 5. Notice manipulation attempts. Nothing below this line reads the result: it is not an
+            //    input to risk, to the gate, or to the executor. Deleting the scanner changes no decision
+            //    this method makes, which is exactly the claim the design is making.
+            var quarantined = InjectionScanner.Scan(documents);
+            audit.Quarantined = quarantined;
+
+            // 6. Evaluate typed facts only. Snippet prose has no representation in the input type.
             var facts = documents
                 .SelectMany(document => document.FactTypes
                     .Select(factType => new EvidenceFact(document.DocumentId, factType)))
@@ -101,19 +108,32 @@ public sealed class WorkflowOrchestrator(
                 throw new InvalidOperationException("The risk evaluator returned an invalid risk level.");
             }
 
-            // 6. Attach display snippets, and only for documents that were actually retained. ForDisplay
-            //    is the one call that turns untrusted prose into text a caller may see.
-            var retained = documents.ToDictionary(d => d.DocumentId, StringComparer.Ordinal);
+            audit.RiskLevel = evaluation.RiskLevel;
+            audit.ReasonCodes = evaluation.Reasons.Select(reason => reason.Code).ToArray();
+
+            // 7. Resolve every citation against retained evidence. A cited document that was not retrieved
+            //    means the assessment and the evidence disagree, so the run stops rather than returning a
+            //    result whose citation list was quietly shortened to hide the disagreement.
+            var retained = documents.ToDictionary(document => document.DocumentId, StringComparer.Ordinal);
+            if (evaluation.CitedDocumentIds.Any(documentId => !retained.ContainsKey(documentId)))
+            {
+                audit.ReasonCodes = [.. audit.ReasonCodes, WorkflowAuditCodes.CitationVerificationFailed];
+                return await audit.CompleteAsync(
+                    WorkflowRunResult.Refused(workflowId, ActionStatus.BlockedEvidenceUnavailable)
+                        with
+                    { Warnings = quarantined },
+                    AuditOutcome.BlockedEvidenceUnavailable);
+            }
+
+            // ForDisplay is the one call that turns untrusted prose into text a caller may see.
             var citations = evaluation.CitedDocumentIds
-                .Where(retained.ContainsKey)
                 .Select(documentId => new Citation(documentId, retained[documentId].UntrustedSnippet.ForDisplay()))
                 .ToArray();
 
-            audit.RiskLevel = evaluation.RiskLevel;
             audit.ReferencedDocumentIds = citations.Select(citation => citation.DocumentId).ToArray();
-            audit.ReasonCodes = evaluation.Reasons.Select(reason => reason.Code).ToArray();
 
-            // 7. A high-risk action needs a stored approval issued for exactly this request.
+            // 8. An action whose risk reached its own approval threshold needs a stored approval, issued
+            //    for exactly this request and against exactly this evidence.
             if (evaluation.RequiresApproval)
             {
                 var decision = await approvalGate.VerifyAsync(
@@ -121,6 +141,7 @@ public sealed class WorkflowOrchestrator(
                     request.VendorId,
                     request.RequestedAction,
                     request.ApprovalId,
+                    EvidenceSetHash.Compute(query, request.RequestedAction, documents),
                     cancellationToken);
 
                 audit.ApproverUserId = decision.Approval?.ApproverUserId;
@@ -128,15 +149,18 @@ public sealed class WorkflowOrchestrator(
                 {
                     audit.ReasonCodes = [.. audit.ReasonCodes, decision.ReasonCode];
                     return await audit.CompleteAsync(
-                        WorkflowRunResult.Assessed(workflowId, evaluation, citations, ActionStatus.BlockedPendingApproval),
+                        WorkflowRunResult.Assessed(
+                            workflowId, evaluation, citations, ActionStatus.BlockedPendingApproval)
+                            with
+                        { Warnings = quarantined },
                         AuditOutcome.BlockedPendingApproval);
                 }
             }
 
-            // 8. Persist the attempt before the effect. If this write fails, nothing runs.
+            // 9. Persist the attempt before the effect. If this write fails, nothing runs.
             await audit.WriteAsync(AuditEventType.ActionAttempt, AuditOutcome.AuthorizedForExecution);
 
-            // 9. Execute. The last step, and the only one that changes the world.
+            // 10. Execute. The last step, and the only one that changes the world.
             executorCallOutstanding = true;
             await actionExecutor.ExecuteAsync(
                 new ActionExecutionRequest(
@@ -148,11 +172,11 @@ public sealed class WorkflowOrchestrator(
                 cancellationToken);
             executorCallOutstanding = false;
 
-            // 10. Record the terminal outcome and return.
+            // 11. Record the terminal outcome and return.
             await audit.WriteAsync(AuditEventType.WorkflowCompleted, AuditOutcome.Executed);
             return WorkflowRunResult.Assessed(workflowId, evaluation, citations, ActionStatus.Executed)
                 with
-            { AuditEventIds = audit.EventIds };
+            { AuditEventIds = audit.EventIds, Warnings = quarantined };
         }
         catch
         {
